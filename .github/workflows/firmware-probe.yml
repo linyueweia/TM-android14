@@ -1,0 +1,66 @@
+name: firmware-probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Download firmware (resume-capable)
+        run: |
+          URL='https://downloads.friendlyelec.com/os-images/rk3568/images/android-14-images-20251222.tgz'
+          EXP='9942f5dee37a67c5e3e5d46e9418d005a39a37a05bac7885d055772f5ab5f292'
+          F=android-14-images-20251222.tgz
+          for i in $(seq 1 30); do
+            if [ -f "$F" ]; then
+              got=$(sha256sum "$F" | awk '{print $1}')
+              [ "$got" = "$EXP" ] && { echo "VERIFY_OK attempt=$i"; break; }
+              echo "attempt=$i size=$(stat -c %s "$F")"
+            fi
+            curl -sL -C - --connect-timeout 20 --max-time 600 --retry 3 -o "$F" "$URL" || true
+            sleep 2
+          done
+          got=$(sha256sum "$F" | awk '{print $1}')
+          [ "$got" = "$EXP" ] || { echo "SHA_MISMATCH got=$got"; exit 1; }
+          ls -l "$F"
+          df -h /
+
+      - name: Extract
+        run: |
+          mkdir -p fw && tar -xzf android-14-images-20251222.tgz -C fw
+          find fw -maxdepth 3 | sort | head -200 > tree.txt
+          cat tree.txt
+          du -sh fw
+          df -h /
+
+      - name: Locate dtb / boot / parameter
+        run: |
+          {
+            echo "## firmware structure"
+            echo '```'
+            cat tree.txt
+            echo '```'
+            echo "## dtb/boot/parameter hits"
+            echo '```'
+            find fw \( -iname '*dtb*' -o -iname '*boot*' -o -iname 'parameter*' -o -iname '*.cfg' -o -iname '*fstab*' \) | sort
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Pack small evidence files
+        run: |
+          mkdir -p evidence
+          find fw -type f \( -size -2M \) \( -iname '*parameter*' -o -iname '*.cfg' -o -iname '*fstab*' -o -iname '*.txt' -o -iname '*.json' -o -iname '*.mk' \) -exec cp --parents {} evidence/ \; 2>/dev/null || true
+          # boot.img / dtb files: copy as-is if small enough (<=100M) for later inspection
+          find fw -type f \( -iname 'boot.img' -o -iname '*.dtb' -o -iname 'dtbo.img' -o -iname 'vbmeta*.img' \) -size -100M -exec cp --parents {} evidence/ \; 2>/dev/null || true
+          tar -czf evidence.tgz evidence
+          ls -l evidence.tgz
+          du -sh evidence
+
+      - name: Upload evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-evidence
+          path: evidence.tgz
+          retention-days: 7
