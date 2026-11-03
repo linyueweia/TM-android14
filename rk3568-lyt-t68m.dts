@@ -904,10 +904,38 @@
  * 图像加速不可用、硬件随机数不可用、DDR 调频监控(dfi)不可用。
  *
  * 以下各块**照抄官方基线 rk3568-roc-k40pro.dtsi 的原文**（同一内核树，
- * 标签必然存在）。刻意保持一致的两项：
+ * 标签必然存在）。刻意保持一致的一项：
  *   - dmc：官方基线里就是 disabled（不开 DDR 调频），此处不动
- *   - npu：厂商出厂 T68M 设备树里亦为 disabled，此处同样保持关闭
+ *
+ * NPU 与 fnOS 那份板级 DTS **有意分叉**：
+ *   - fnOS / lyw-OS 的 vendor 6.1 内核上 NPU 必须 disabled —— 打开后 15.93s
+ *     必 panic（rockchip-pm-domain 向 npu 域发 idle 请求等不到 ack：
+ *     "failed to get ack on domain 'npu', val=0x1ee"，vendor 内核的
+ *     panic_on_set_idle 直接 Kernel panic，K1 实机复现）。
+ *   - Android 14 这份 SDK 的板级基线（rk3568-nanopi5-rev01.dtb）里
+ *     npu / bus-npu / iommu@fde4b000 全部 status="okay"，且带
+ *     rknpu-supply / bus-supply / pvtm-supply 三个 regulator。
+ *     同 SoC 上这套 Android 内核是官方出货形态，NPU 打开不影响开机，
+ *     因此这里与 R5S 对齐打开（RK3568 的 0.8T NPU 在 Android 侧由 rknn 用）。
  * ══════════════════════════════════════════════════════════════════ */
+/* NPU（对齐 rk3568-nanopi5 官方 Android 板级） */
+&rknpu {
+	rknpu-supply = <&vdd_npu>;
+	status = "okay";
+};
+
+&rknpu_mmu {
+	status = "okay";
+};
+
+&bus_npu {
+	compatible = "rockchip,rk3568-bus";
+	rockchip,busfreq-policy = "clkfreq";
+	bus-supply = <&vdd_logic>;
+	pvtm-supply = <&vdd_cpu>;
+	status = "okay";
+};
+
 &dfi {
 	status = "okay";
 };
@@ -993,4 +1021,42 @@
 
 &usbhost30 {
 	status = "okay";
+};
+
+/* ══════════════════════════════════════════════════════════════════
+ * Android 侧必需、而 fnOS/OpenWrt 那份板级 DTS 里没有的节点
+ *
+ * 参数全部照抄厂商 Android 板级 rk3568-nanopi5-rev01.dtb（同一颗 6.1 内核、
+ * 同一 SoC），不自己拍数字：
+ *   linux,cma : reg 0x10000000 / 8 MiB，reusable + linux,cma-default
+ *               —— gralloc/VPU/相机走这块 CMA；缺了就退回内建默认
+ *   ramoops   : reg 0x110000 / 960 KiB，record 128K + console 512K + pmsg 320K
+ *               —— Android 的 last_kmsg 来源，缺了崩溃后无现场
+ *   optee     : linaro,optee-tz / method=smc
+ *               —— Android keymaster(KeyMint) 走它；缺了只有软件实现
+ * ══════════════════════════════════════════════════════════════════ */
+&{/reserved-memory} {
+	linux,cma {
+		compatible = "shared-dma-pool";
+		inactive;
+		reusable;
+		reg = <0x0 0x10000000 0x0 0x800000>;
+		linux,cma-default;
+	};
+
+	ramoops: ramoops@110000 {
+		compatible = "ramoops";
+		reg = <0x0 0x110000 0x0 0xf0000>;
+		record-size = <0x20000>;
+		console-size = <0x80000>;
+		ftrace-size = <0x0>;
+		pmsg-size = <0x50000>;
+	};
+};
+
+&{/firmware} {
+	optee {
+		compatible = "linaro,optee-tz";
+		method = "smc";
+	};
 };

@@ -84,7 +84,23 @@ jobs:
             file "$D"
             dtc -I dtb -O dts "$D" 2>/dev/null | head -40
             echo '```'
+            echo "## SoC IP enable matrix (board vs vendor rk3568-nanopi5-rev01)"
+            echo '```'
+            python3 tools/dtb_features.py "$D" --base dist/rk3568-nanopi5-rev01-base.dtb
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Fail loudly if a feature the vendor board has enabled is off here.
+      # NPU/VPU/RGA/JPEG/OP-TEE/CMA being disabled is silent at boot and only
+      # shows up later as "rknn won't init" or "gralloc allocation failed".
+      - name: Assert feature parity
+        run: |
+          D=sdk/kernel-6.1/arch/arm64/boot/dts/rockchip/rk3568-lyt-t68m.dtb
+          python3 tools/dtb_features.py "$D" --base dist/rk3568-nanopi5-rev01-base.dtb             | grep -E '^(NPU|GPU|VPU-dec|VPU-enc|RGA|OP-TEE|CMA) ' | tee /tmp/features.txt
+          grep -q 'NPU .*<<< DIFF' /tmp/features.txt && { echo "NPU still disabled"; exit 1; } || true
+          grep -q 'GPU .*<<< DIFF' /tmp/features.txt && { echo "GPU disabled"; exit 1; } || true
+          grep -q 'VPU-dec .*<<< DIFF' /tmp/features.txt && { echo "VPU-dec disabled"; exit 1; } || true
+          echo "feature parity OK"
           mkdir -p out
           cp "$D" out/
           cp /tmp/dtb_build.log out/ 2>/dev/null || true
