@@ -1,0 +1,78 @@
+name: dtb-build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-dtb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Partial clone SDK (kernel-6.1 only)
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            http://112.124.9.243:3000/friendlyelec/rk35xx-android14.git sdk
+          cd sdk
+          git sparse-checkout set kernel-6.1
+          du -sh .git kernel-6.1
+          df -h /
+
+      - name: Install T68M dts + register in Makefile
+        run: |
+          DDIR=sdk/kernel-6.1/arch/arm64/boot/dts/rockchip
+          cp rk3568-lyt-t68m.dts "$DDIR/"
+          python3 - <<'EOF'
+          p = "sdk/kernel-6.1/arch/arm64/boot/dts/rockchip/Makefile"
+          s = open(p).read()
+          if "rk3568-lyt-t68m.dtb" in s:
+              print("already registered"); raise SystemExit
+          anchor = "rk3568-nanopi5-rev01.dtb"
+          i = s.index(anchor)
+          line_start = s.rfind("\n", 0, i) + 1
+          ins = "\trk3568-lyt-t68m.dtb \\\n"
+          s = s[:line_start] + ins + s[line_start:]
+          open(p, "w").write(s)
+          print("registered before:", anchor)
+          EOF
+          grep -n "lyt-t68m" "$DDIR/Makefile"
+
+      - name: Locate android defconfig
+        run: |
+          cd sdk/kernel-6.1
+          DC=$(find . -name 'nanopi5_android_defconfig' | head -1)
+          if [ -z "$DC" ]; then DC=$(find . -name '*_android_defconfig' | grep -iE 'rk3568|nanopi5' | head -1); fi
+          echo "found: $DC"
+          [ -z "$DC" ] && { find . -name '*defconfig' | grep -i android | head; exit 1; }
+          cp "$DC" arch/arm64/configs/t68m_android_defconfig
+          make ARCH=arm64 t68m_android_defconfig
+
+      - name: Build T68M dtb
+        run: |
+          cd sdk/kernel-6.1
+          make ARCH=arm64 -j$(nproc) rockchip/rk3568-lyt-t68m.dtb 2>&1 | tee /tmp/dtb_build.log | tail -30
+          ls -l arch/arm64/boot/dts/rockchip/rk3568-lyt-t68m.dtb
+
+      - name: Evidence
+        run: |
+          D=sdk/kernel-6.1/arch/arm64/boot/dts/rockchip/rk3568-lyt-t68m.dtb
+          {
+            echo "## dtb build"
+            echo '```'
+            ls -l "$D"
+            file "$D"
+            dtc -I dtb -O dts "$D" 2>/dev/null | head -40
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p out
+          cp "$D" out/
+          cp /tmp/dtb_build.log out/ 2>/dev/null || true
+          tar -czf out.tgz out
+
+      - name: Upload dtb
+        uses: actions/upload-artifact@v4
+        with:
+          name: t68m-dtb
+          path: out.tgz
+          retention-days: 7
