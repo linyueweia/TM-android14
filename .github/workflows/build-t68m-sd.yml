@@ -1,0 +1,151 @@
+name: build-t68m-sd
+
+# Assemble a bootable SD image for LYT T68M out of FriendlyElec's rk3568 Android 14
+# partition bundle, entirely on the runner, and publish it as a downloadable artifact.
+#
+# Why on the runner: downloads.friendlyelec.com ignores Range requests (a ranged GET
+# comes back as HTTP 200 streaming the whole file), so an interrupted home download can
+# never resume. The runner's uplink is stable, and artifacts come back over GitHub's CDN.
+#
+# What it does:
+#   1. fetch android-14-images-<date>.tgz and unpack the partition images
+#   2. take boot.img and swap the RSCE dtb slots for the T68M dtb in dist/
+#      (16 rk3568-nanopi5-rev0X slots -> one T68M tree, so any hwrev probe matches)
+#   3. assemble the SD image with FriendlyElec's own sd-fuse_rk3568 mk-sd-image.sh
+#   4. gzip it and upload
+on:
+  workflow_dispatch:
+    inputs:
+      src_url:
+        description: partition bundle url
+        required: false
+        default: https://downloads.friendlyelec.com/os-images/rk3568/images/android-14-images-20251222.tgz
+      dtb:
+        description: dtb to inject (repo-relative)
+        required: false
+        default: dist/rk3568-lyt-t68m-android.dtb
+      raw_size_mb:
+        description: SD image raw size in MiB
+        required: false
+        default: "7800"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bc bison flex gzip pigz python3 parted dosfstools mtools
+
+      - name: Fetch partition bundle
+        run: |
+          URL="${{ github.event.inputs.src_url }}"
+          echo "url: $URL"
+          for i in 1 2 3 4 5; do
+            if curl -L --fail --connect-timeout 20 --max-time 3600 \
+                    --retry 5 --retry-delay 10 --retry-all-errors \
+                    -o images.tgz "$URL"; then
+              echo "downloaded on attempt $i"; break
+            fi
+            echo "attempt $i failed, retrying"; sleep 20
+          done
+          ls -l images.tgz
+          sha256sum images.tgz
+
+      - name: Unpack and inventory
+        run: |
+          mkdir -p parts
+          tar xzf images.tgz -C parts
+          echo "### bundle contents" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          find parts -maxdepth 2 -type f -printf '%10s  %p\n' | sort -k2 | head -40 >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          find parts -maxdepth 2 -type f -printf '%10s  %p\n' | sort -k2 | head -40
+
+      - name: Clone sd-fuse
+        run: git clone --depth 1 https://github.com/friendlyarm/sd-fuse_rk3568.git sd-fuse
+
+      - name: Stage partition files
+        run: |
+          set -eux
+          D=sd-fuse/android14
+          mkdir -p "$D"
+          pick() { find parts -name "$1" -type f | head -1; }
+
+          # files that must come from the bundle
+          for f in parameter.txt config.cfg MiniLoaderAll.bin uboot.img dtbo.img \
+                   vbmeta.img misc.img pcba_small_misc.img pcba_whole_misc.img \
+                   baseparameter.img super.img; do
+            src=$(pick "$f" || true)
+            if [ -n "$src" ]; then cp "$src" "$D/$f"; echo "from bundle: $f"; else echo "MISSING: $f"; fi
+          done
+
+          # idbloader / misc / dtbo can fall back to sd-fuse prebuilt
+          for f in idbloader.img MiniLoaderAll.bin misc.img dtbo.img; do
+            [ -f "$D/$f" ] || { cp "sd-fuse/prebuilt/$f" "$D/$f"; echo "from prebuilt: $f"; }
+          done
+          [ -f "$D/parameter.txt" ] || cp sd-fuse/prebuilt/parameter.template "$D/parameter.txt"
+
+          # keep the pristine boot.img for reference, then patch ours in
+          src=$(pick boot.img || true)
+          [ -n "$src" ] || { echo "no boot.img in bundle"; exit 1; }
+          cp "$src" "$D/boot.orig.img"
+          ls -l "$D" | head -30
+
+      - name: Inject T68M dtb into boot.img
+        run: |
+          set -eux
+          D=sd-fuse/android14
+          DTB="${{ github.event.inputs.dtb }}"
+          test -f "$DTB"
+          python3 tools/dtb_features.py "$DTB" --base dist/rk3568-nanopi5-rev01-base.dtb | tee /tmp/feat.txt
+          grep -q 'NPU .*<<< DIFF' /tmp/feat.txt && { echo "dtb still has NPU disabled"; exit 1; } || true
+          python3 tools/rsce_tool.py boot-replace "$D/boot.orig.img" \
+            --pattern 'rk3568-nanopi5-rev*' --dtb "$DTB" --fill-revs 0-15 -o "$D/boot.img"
+          python3 tools/rsce_tool.py boot-list "$D/boot.img" | grep -E 'entries=|rk3568' | head -20
+
+      - name: Assemble SD image
+        run: |
+          set -eux
+          cd sd-fuse
+          export RAW_SIZE_MB=${{ github.event.inputs.raw_size_mb }}
+          sudo -E ./mk-sd-image.sh android14 2>&1 | tail -40
+          ls -l out/
+          IMG=$(ls out/*.img | head -1)
+          echo "IMG=$IMG" >> "$GITHUB_ENV"
+          du -h "$IMG"
+
+      - name: Compress
+        run: |
+          set -eux
+          cd sd-fuse
+          IMG=$(ls out/*.img | head -1)
+          pigz -6 -p "$(nproc)" -c "$IMG" > "out/$(basename "$IMG").gz"
+          ls -l out/
+          sha256sum "out/$(basename "$IMG").gz" | tee out/SHA256SUMS
+
+      - name: Evidence
+        run: |
+          {
+            echo "## T68M SD image"
+            echo '```'
+            ls -l sd-fuse/out/
+            cat sd-fuse/out/SHA256SUMS
+            echo '--- dtb feature matrix ---'
+            cat /tmp/feat.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: t68m-android14-sd
+          path: |
+            sd-fuse/out/*.gz
+            sd-fuse/out/SHA256SUMS
+          compression-level: 0
+          retention-days: 7
