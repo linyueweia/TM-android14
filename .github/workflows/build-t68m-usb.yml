@@ -1,0 +1,127 @@
+name: build-t68m-usb
+
+# USB 线刷包（Maskrom + RKDevTool / rkdeveloptool）
+#   1. update.img        —— Rockchip RKAF 容器（afptool + rkImageMaker 打包），RKDevTool 一键刷
+#   2. partitions zip    —— parameter.txt + MiniLoaderAll.bin + 各分区 img，用「分区烧写」兜底
+# 两条都出：afptool/rkImageMaker 来自 rkbin，版本不对时打包可能失败，分区包一定能用。
+on:
+  workflow_dispatch:
+    inputs:
+      src_url:
+        description: android-14 partition bundle
+        required: false
+        default: https://downloads.friendlyelec.com/os-images/rk3568/images/android-14-images-20251222.tgz
+      dtb:
+        description: dtb to inject
+        required: false
+        default: dist/rk3568-lyt-t68m-android.dtb
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3 zip unzip file
+          df -h /
+
+      - name: Fetch bundle
+        run: |
+          set -eux
+          for i in 1 2 3 4 5; do
+            curl -L --fail --connect-timeout 20 --max-time 3600 \
+                 --retry 5 --retry-delay 10 --retry-all-errors \
+                 -o images.tgz "${{ github.event.inputs.src_url }}" && break
+            sleep 15
+          done
+          ls -l images.tgz; sha256sum images.tgz
+          mkdir -p parts && tar xzf images.tgz -C parts
+          find parts -maxdepth 2 -type f -printf '%10s %p\n' | sort -k2 | head -25
+
+      - name: Inject T68M dtb into boot.img
+        run: |
+          set -eux
+          mkdir -p usb
+          D=usb
+          DTB="${{ github.event.inputs.dtb }}"
+          python3 tools/dtb_features.py "$DTB" --base dist/rk3568-nanopi5-rev01-base.dtb | tee /tmp/feat.txt
+          grep -q 'NPU .*<<< DIFF' /tmp/feat.txt && { echo "dtb NPU still disabled"; exit 1; } || true
+          pick() { find parts -name "$1" -type f | head -1; }
+          src=$(pick boot.img); [ -n "$src" ] || { echo "no boot.img"; exit 1; }
+          cp "$src" "$D/boot.orig.img"
+          python3 tools/rsce_tool.py boot-replace "$D/boot.orig.img" \
+            --pattern 'rk3568-nanopi5-rev*' --dtb "$DTB" --fill-revs 0-15 -o "$D/boot.img"
+          python3 tools/rsce_tool.py boot-list "$D/boot.img" | grep -E 'entries=|rk3568' | head -8
+          for f in parameter.txt MiniLoaderAll.bin uboot.img misc.img dtbo.img vbmeta.img \
+                   super.img baseparameter.img; do
+            s=$(pick "$f" || true)
+            if [ -n "$s" ]; then cp "$s" "$D/$f"; else echo "MISSING $f"; fi
+          done
+          ls -l "$D"
+
+      - name: Build update.img (Rockchip RKAF)
+        run: |
+          set -euxo pipefail
+          cd usb
+          git clone --depth 1 https://github.com/rockchip-linux/rkbin.git /tmp/rkbin || true
+          TOOLS=/tmp/rkbin/tools/linux/Linux_Pack_Firmware/rockdev
+          ls -l "$TOOLS" || true
+          chmod +x "$TOOLS"/afptool "$TOOLS"/rkImageMaker 2>/dev/null || true
+
+          grep -oE '\([a-z0-9_]+' parameter.txt | tr -d '(' | sort -u > /tmp/allparts.txt || true
+          cat /tmp/allparts.txt || true
+          {
+            printf '# NAME\tPATH\n'
+            printf 'package-file\tpackage-file\n'
+            printf 'parameter\tparameter.txt\n'
+            printf 'bootloader\tMiniLoaderAll.bin\n'
+          } > package-file
+          while read -r p; do
+            [ -n "$p" ] || continue
+            [ "$p" = "bootloader" ] && continue
+            [ -f "$p.img" ] && printf '%s\t%s.img\n' "$p" "$p" >> package-file
+          done < /tmp/allparts.txt
+          cat package-file
+
+          "$TOOLS/afptool" -pack ./ update.tmp
+          "$TOOLS/rkImageMaker" -RK3568 MiniLoaderAll.bin update.tmp update.img
+          rm -f update.tmp package-file
+          ls -l update.img
+          sha256sum update.img
+
+      - name: Pack partitions zip
+        run: |
+          set -euxo pipefail
+          cd usb
+          cp ../docs/usb-flash-readme.txt 说明.txt
+          zip -r ../t68m-android14-usb-partitions.zip . -x 'update.tmp'
+          ls -l ../t68m-android14-usb-partitions.zip
+
+      - name: Evidence
+        if: always()
+        run: |
+          {
+            echo "## T68M USB flash package"
+            echo '```'
+            ls -l usb/ 2>/dev/null || true
+            ls -l t68m-android14-usb-partitions.zip 2>/dev/null || true
+            echo '--- dtb feature matrix ---'
+            cat /tmp/feat.txt 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t68m-android14-usb
+          path: |
+            usb/update.img
+            t68m-android14-usb-partitions.zip
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: warn
