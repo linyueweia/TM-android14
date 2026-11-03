@@ -1,0 +1,169 @@
+name: build-t68m-eflasher
+
+# Build an eMMC-flashing (eflasher) SD image for LYT T68M: boot the card, it flashes
+# Android 14 into the board's eMMC instead of running from the card.
+#
+# Chain (FriendlyElec's own): mk-emmc-image.sh -> mk-sd-image.sh eflasher ->
+# tools/fill_img_to_eflasher, which stuffs the OS image bundle into the eflasher
+# card's FRIENDLYARM partition and leaves out/rk3568-eflasher-<os>-6.1-arm64-<date>.img
+#
+# WARNING: flashing eMMC destroys whatever is on it. On this T68M the eMMC holds the
+# iNextOS boot partition (mmcblk0p1 /boot) -- back it up before using this image.
+on:
+  workflow_dispatch:
+    inputs:
+      src_url:
+        description: android-14 partition bundle
+        required: false
+        default: https://downloads.friendlyelec.com/os-images/rk3568/images/android-14-images-20251222.tgz
+      eflasher_url:
+        description: eflasher template bundle
+        required: false
+        default: https://downloads.friendlyelec.com/os-images/rk3568/images/emmc-flasher-images-20260806.tgz
+      dtb:
+        description: dtb to inject
+        required: false
+        default: dist/rk3568-lyt-t68m-android.dtb
+      autostart:
+        description: autostart=yes flashes as soon as the card boots
+        required: false
+        default: "no"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bc bison flex gzip pigz python3 parted dosfstools mtools \
+            exfatprogs e2fsprogs android-sdk-libsparse-utils || true
+          command -v simg2img || echo "simg2img missing"
+          df -h /
+
+      - name: Fetch both bundles
+        run: |
+          set -eux
+          fetch() {
+            for i in 1 2 3 4 5; do
+              curl -L --fail --connect-timeout 20 --max-time 3600 \
+                   --retry 5 --retry-delay 10 --retry-all-errors -o "$2" "$1" && return 0
+              echo "retry $i for $1"; sleep 15
+            done
+            return 1
+          }
+          fetch "${{ github.event.inputs.src_url }}" images.tgz
+          fetch "${{ github.event.inputs.eflasher_url }}" eflasher.tgz
+          ls -l images.tgz eflasher.tgz
+          sha256sum images.tgz eflasher.tgz
+
+      - name: Unpack
+        run: |
+          set -eux
+          mkdir -p parts efl
+          tar xzf images.tgz -C parts
+          tar xzf eflasher.tgz -C efl
+          echo "--- android14 bundle ---"; find parts -maxdepth 2 -type f -printf '%10s %p\n' | sort -k2 | head -20
+          echo "--- eflasher bundle ---"; find efl -maxdepth 2 -type f -printf '%10s %p\n' | sort -k2 | head -20
+          echo "--- eflasher dir candidate ---"; find efl -maxdepth 3 -name parameter.txt
+
+      - name: Clone sd-fuse
+        run: |
+          set -eux
+          git clone --depth 1 https://github.com/friendlyarm/sd-fuse_rk3568.git sd-fuse
+          if ! command -v simg2img >/dev/null; then
+            sed -i 's/android-tools-fsutils/android-sdk-libsparse-utils/' sd-fuse/tools/util.sh
+          fi
+          namei -l sd-fuse/mk-emmc-image.sh || true
+
+      - name: Stage android14 dir
+        run: |
+          set -eux
+          D=sd-fuse/android14
+          mkdir -p "$D"
+          pick() { find parts -name "$1" -type f | head -1; }
+          for f in parameter.txt config.cfg MiniLoaderAll.bin uboot.img dtbo.img \
+                   vbmeta.img misc.img pcba_small_misc.img pcba_whole_misc.img \
+                   baseparameter.img super.img; do
+            src=$(pick "$f" || true)
+            [ -n "$src" ] && cp "$src" "$D/$f" || echo "MISSING: $f"
+          done
+          for f in idbloader.img MiniLoaderAll.bin misc.img dtbo.img; do
+            [ -f "$D/$f" ] || cp "sd-fuse/prebuilt/$f" "$D/$f"
+          done
+          src=$(pick boot.img); [ -n "$src" ] || { echo "no boot.img"; exit 1; }
+          cp "$src" "$D/boot.orig.img"
+          ls -l "$D"
+
+      - name: Stage eflasher dir
+        run: |
+          set -eux
+          EF=$(dirname "$(find efl -maxdepth 3 -name parameter.txt | head -1)")
+          echo "eflasher template dir: $EF"
+          du -sh "$EF"
+          rm -rf sd-fuse/eflasher
+          cp -a "$EF" sd-fuse/eflasher
+          ls sd-fuse/eflasher | head -20
+
+      - name: Inject T68M dtb into boot.img
+        run: |
+          set -eux
+          D=sd-fuse/android14
+          DTB="${{ github.event.inputs.dtb }}"
+          python3 tools/dtb_features.py "$DTB" --base dist/rk3568-nanopi5-rev01-base.dtb | tee /tmp/feat.txt
+          grep -q 'NPU .*<<< DIFF' /tmp/feat.txt && { echo "dtb NPU still disabled"; exit 1; } || true
+          python3 tools/rsce_tool.py boot-replace "$D/boot.orig.img" \
+            --pattern 'rk3568-nanopi5-rev*' --dtb "$DTB" --fill-revs 0-15 -o "$D/boot.img"
+          python3 tools/rsce_tool.py boot-list "$D/boot.img" | grep -E 'entries=|rk3568' | head -20
+
+      - name: Build eflasher image
+        run: |
+          set -euxo pipefail
+          cd sd-fuse
+          export SDFUSE_NONINTERACTIVE=1
+          export RAW_SIZE_MB=7800
+          ARGS=""
+          if [ "${{ github.event.inputs.autostart }}" = "yes" ]; then ARGS="autostart=yes"; fi
+          sudo -E ./mk-emmc-image.sh android14 $ARGS 2>&1 | tee /tmp/mk.log | tail -40
+          ls -l out/
+          df -h /
+
+      - name: Compress
+        run: |
+          set -euxo pipefail
+          cd sd-fuse
+          IMG=$(ls out/*eflasher*android14*.img 2>/dev/null | head -1)
+          [ -n "$IMG" ] || IMG=$(ls out/*.img | head -1)
+          echo "packing $IMG"
+          pigz -6 -p "$(nproc)" -c "$IMG" > "out/$(basename "$IMG").gz"
+          ls -l out/*.gz
+          sha256sum out/*.gz | tee out/SHA256SUMS
+
+      - name: Evidence
+        if: always()
+        run: |
+          {
+            echo "## T68M eflasher image"
+            echo '```'
+            ls -l sd-fuse/out/ 2>/dev/null || true
+            cat sd-fuse/out/SHA256SUMS 2>/dev/null || true
+            echo '--- dtb ---'
+            cat /tmp/feat.txt 2>/dev/null || true
+            echo '--- mk-emmc tail ---'
+            tail -30 /tmp/mk.log 2>/dev/null || true
+            echo '```'
+            echo "**WARNING**: flashing eMMC wipes it. T68M eMMC holds iNextOS /boot (mmcblk0p1)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: t68m-android14-eflasher
+          path: |
+            sd-fuse/out/*.gz
+            sd-fuse/out/SHA256SUMS
+          compression-level: 0
+          retention-days: 7
