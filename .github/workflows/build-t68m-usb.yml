@@ -77,6 +77,14 @@ jobs:
           file "$TOOLS"/afptool "$TOOLS"/rkImageMaker || true
           "$TOOLS/afptool" --help 2>&1 | head -5 || true
 
+          # rkImageMaker -os_type:androidos 强制要求 backup 分区（"No found backup partition!"），
+          # 友善的分区包不带 backup.img -> 按 parameter.txt 里的扇区数造一个零文件
+          BK=$(sed -n 's/.*CMDLINE:[^:]*://p' parameter.txt | tr ',' '\n' | grep -oE '0x[0-9a-f]+@0x[0-9a-f]+\(backup\)' | cut -d'@' -f1 | head -1)
+          if [ -n "$BK" ] && [ ! -f backup.img ]; then
+            truncate -s $(( BK * 512 )) backup.img
+            echo "created backup.img $(( BK * 512 )) bytes (from parameter.txt)"
+          fi
+
           # package-file：官方格式只有两列 NAME<TAB>path（第一行是 package-file 自身），
           # 写三列会把第三列当路径 -> afptool 报 <AddFile> err=2。A/B 槽映射到无后缀的 img。
           PARTS=$(sed -n 's/.*CMDLINE:[^:]*://p' parameter.txt | tr ',' '\n' | sed -n 's/.*(\([a-z0-9_]*\).*/\1/p' | sed 's/:.*//')
