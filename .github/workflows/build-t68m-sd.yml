@@ -39,7 +39,12 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq bc bison flex gzip pigz python3 parted dosfstools mtools
+          sudo apt-get install -y -qq bc bison flex gzip pigz python3 parted dosfstools mtools \
+            exfatprogs e2fsprogs android-sdk-libsparse-utils || true
+          # ubuntu 24.04+/26.04 dropped android-tools-fsutils; android-sdk-libsparse-utils
+          # provides simg2img instead, which sd-fuse's util.sh probes for.
+          command -v simg2img && simg2img --help 2>&1 | head -2 || echo "simg2img missing"
+          command -v mkfs.exfat || echo "mkfs.exfat missing"
 
       - name: Fetch partition bundle
         run: |
@@ -67,7 +72,17 @@ jobs:
           find parts -maxdepth 2 -type f -printf '%10s  %p\n' | sort -k2 | head -40
 
       - name: Clone sd-fuse
-        run: git clone --depth 1 https://github.com/friendlyarm/sd-fuse_rk3568.git sd-fuse
+        run: |
+          set -eux
+          git clone --depth 1 https://github.com/friendlyarm/sd-fuse_rk3568.git sd-fuse
+          # FriendlyElec's util.sh still asks for android-tools-fsutils, which no longer
+          # exists on ubuntu 24.04+ ("has no installation candidate" -> the whole
+          # mk-sd-image.sh dies on set -e). If simg2img is already present the probe is
+          # skipped, but patch the name anyway so a missing package can't kill the build.
+          if ! command -v simg2img >/dev/null; then
+            sed -i 's/android-tools-fsutils/android-sdk-libsparse-utils/' sd-fuse/tools/util.sh
+          fi
+          grep -n "PACKAGES=" sd-fuse/tools/util.sh | head -5
 
       - name: Stage partition files
         run: |
@@ -110,10 +125,10 @@ jobs:
 
       - name: Assemble SD image
         run: |
-          set -eux
+          set -euxo pipefail
           cd sd-fuse
           export RAW_SIZE_MB=${{ github.event.inputs.raw_size_mb }}
-          sudo -E ./mk-sd-image.sh android14 2>&1 | tail -40
+          sudo -E ./mk-sd-image.sh android14 2>&1 | tee /tmp/mk.log | tail -40
           ls -l out/
           IMG=$(ls out/*.img | head -1)
           echo "IMG=$IMG" >> "$GITHUB_ENV"
@@ -129,14 +144,17 @@ jobs:
           sha256sum "out/$(basename "$IMG").gz" | tee out/SHA256SUMS
 
       - name: Evidence
+        if: always()
         run: |
           {
             echo "## T68M SD image"
             echo '```'
-            ls -l sd-fuse/out/
-            cat sd-fuse/out/SHA256SUMS
+            ls -l sd-fuse/out/ 2>/dev/null || true
+            cat sd-fuse/out/SHA256SUMS 2>/dev/null || true
             echo '--- dtb feature matrix ---'
-            cat /tmp/feat.txt
+            cat /tmp/feat.txt 2>/dev/null || true
+            echo '--- mk-sd-image tail ---'
+            tail -30 /tmp/mk.log 2>/dev/null || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
