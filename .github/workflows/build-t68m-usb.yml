@@ -77,20 +77,25 @@ jobs:
           file "$TOOLS"/afptool "$TOOLS"/rkImageMaker || true
           "$TOOLS/afptool" --help 2>&1 | head -5 || true
 
-          # package-file：分区名从 parameter.txt 的 CMDLINE 取，只列有文件的
+          # package-file：官方格式只有两列 NAME<TAB>path（第一行是 package-file 自身），
+          # 写三列会把第三列当路径 -> afptool 报 <AddFile> err=2。A/B 槽映射到无后缀的 img。
           PARTS=$(sed -n 's/.*CMDLINE:[^:]*://p' parameter.txt | tr ',' '\n' | sed -n 's/.*(\([a-z0-9_]*\).*/\1/p' | sed 's/:.*//')
           echo "$PARTS"
           {
-            printf '# NAME\tPATH\tTYPE\n'
-            printf 'package-file\tpackage-file\tupdate-script\n'
-            printf 'parameter\tparameter.txt\n'
+            printf '# NAME\tpath\n'
+            printf 'package-file\tpackage-file\n'
             printf 'bootloader\tMiniLoaderAll.bin\n'
+            printf 'parameter\tparameter.txt\n'
             for p in $PARTS; do
-              [ "$p" = "bootloader" ] && continue
-              [ -f "$p.img" ] && printf '%s\t%s.img\n' "$p" "$p"
+              case "$p" in *_b) continue ;; esac
+              base=${p%_a}
+              if [ -f "$p.img" ]; then f="$p.img"
+              elif [ -f "$base.img" ]; then f="$base.img"
+              else continue; fi
+              printf '%s\t%s\n' "$p" "$f"
             done
           } > package-file
-          cat package-file
+          cat -A package-file | head -20
 
           "$TOOLS/afptool" -pack ./ update.raw.img
           # TAG 从 MiniLoaderAll.bin 偏移 21 读 4 字节（如 3568 -> RK3568），不能写死
