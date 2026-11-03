@@ -1,0 +1,42 @@
+name: probe
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Disk & env
+        run: |
+          df -h / /mnt 2>/dev/null || df -h
+          echo "---"
+          free -h
+          nproc
+
+      - name: Reachability of FriendlyElec gitea
+        run: |
+          curl -s -o /dev/null -w 'gitea_http=%{http_code} time=%{time_total}s\n' --connect-timeout 15 \
+            http://112.124.9.243:3000/api/v1/repos/friendlyelec/rk35xx-android14
+
+      - name: Shallow clone SDK (depth 1)
+        run: |
+          start=$(date +%s)
+          git clone --depth 1 http://112.124.9.243:3000/friendlyelec/rk35xx-android14.git sdk
+          end=$(date +%s)
+          echo "clone_seconds=$((end-start))"
+          du -sh sdk sdk/.git
+          df -h /
+
+      - name: Summary
+        run: |
+          {
+            echo "## probe result"
+            echo '```'
+            df -h /
+            du -sh sdk sdk/.git 2>/dev/null
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
