@@ -1,0 +1,996 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+// Source: https://github.com/immortalwrt/immortalwrt/blob/594ab12ff83c9d0a30165a20366d591c4a80e944/target/linux/rockchip/files/arch/arm64/boot/dts/rockchip/rk3568-lyt-t68m.dts
+
+/dts-v1/;
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
+#include <dt-bindings/pinctrl/rockchip.h>
+#include <dt-bindings/soc/rockchip,vop2.h>
+#include "rk3568.dtsi"
+
+
+
+/ {
+	model = "LYT T68M";
+	compatible = "lyt,t68m", "rockchip,rk3568";
+
+	aliases {
+		ethernet0 = &gmac0;
+		ethernet1 = &gmac1;
+		mmc0 = &sdhci;
+		mmc1 = &sdmmc0;
+
+		led-boot = &power_led;
+		led-failsafe = &power_led;
+		led-running = &power_led;
+		led-upgrade = &power_led;
+	};
+
+	chosen: chosen {
+		stdout-path = "serial2:1500000n8";
+	};
+
+	/* 按键：板上有两个，谁也别删谁 —— ①复位键走 GPIO（gpio3 RK_PB1 低有效、
+	   50ms 去抖、上报 KEY_RESTART），pinctrl 组 reset_button_pin 本文件已有；
+	   ②saradc0 上的 RECOVERY 键走 ADC（keyup 1750000mV 阈值）。
+	   xck-nas 飞牛金标准件两把键都有；iStoreOS 官方件只保留 adc-keys。
+	   2026-10-28 曾按 immortalwrt 594ab12 把 adc-keys 整个换成 gpio-keys，
+	   复核权威件后回退成两者并存。 */
+	adc-keys {
+		compatible = "adc-keys";
+		io-channels = <&saradc 0>;
+		io-channel-names = "buttons";
+		keyup-threshold-microvolt = <1750000>;
+		poll-interval = <100>;
+
+		button-recovery {
+			label = "RECOVERY";
+			linux,code = <KEY_RESTART>;
+			press-threshold-microvolt = <0>;
+		};
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+		pinctrl-names = "default";
+		pinctrl-0 = <&reset_button_pin>;
+
+		button-reset {
+			label = "reset";
+			gpios = <&gpio3 RK_PB1 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RESTART>;
+			debounce-interval = <50>;
+		};
+	};
+
+	gpio-leds {
+		compatible = "gpio-leds";
+		pinctrl-names = "default";
+		pinctrl-0 = <&led_power_pin>, <&led_status_pin>;
+
+		power_led: led-power {
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_POWER;
+			gpios = <&gpio4 RK_PC6 GPIO_ACTIVE_HIGH>;
+			/* 无此属性时 leds-gpio 驱动在探测期会把灯置灭（内核默认 off）。
+			   厂商系统靠用户态脚本点亮，我们的系统没有该脚本，故在设备树里定死常亮。 */
+			default-state = "on";
+		};
+
+		status_led: led-status {
+			label = "t68m:red:user";
+			color = <LED_COLOR_ID_RED>;
+			function = LED_FUNCTION_STATUS;
+			gpios = <&gpio4 RK_PC5 GPIO_ACTIVE_HIGH>;
+			default-state = "on";
+		};
+	};
+
+	/* HDMI 连接器：**故意不写**（2026-10 实机定位，勿再加回来）。
+	   本内核（6.1 vendor BSP）的 dw-hdmi 自己创建 connector，板级再自造一个
+	   `hdmi-connector` 节点 + `&hdmi` 的 port@1 与之共存，会让 drm_bridge_attach
+	   返回 -22、整个 HDMI probe 失败（实测 `dwhdmi-rockchip: probe of
+	   fe0a0000.hdmi failed with error -22`，/sys/class/drm 下无任何 HDMI 连接器）。
+	   xck-nas 飞牛金标准件（6.12/6.18 主线族）里确实有 hdmi-con —— 那是**另一条内核线**
+	   的写法，属性不能互抄（详见 README「显示 / LED / 硬件编解码」）。 */
+
+	sdio_pwrseq: sdio-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		clocks = <&rk809 1>;
+		clock-names = "ext_clock";
+		pinctrl-names = "default";
+		pinctrl-0 = <&wifi_enable_h>;
+		post-power-on-delay-ms = <100>;
+		power-off-delay-us = <5000000>;
+		reset-gpios = <&gpio3 RK_PD5 GPIO_ACTIVE_LOW>;
+	};
+
+	vcc12v_dcin: vcc12v-dcin-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc12v_dcin";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <12000000>;
+		regulator-max-microvolt = <12000000>;
+	};
+
+	vcc3v3_sys: vcc3v3-sys-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc3v3_sys";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		vin-supply = <&vcc12v_dcin>;
+	};
+
+	vcc5v0_sys: vcc5v0-sys-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_sys";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		vin-supply = <&vcc12v_dcin>;
+	};
+
+	vcc5v0_usb: vcc5v0-usb-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_usb";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		vin-supply = <&vcc12v_dcin>;
+	};
+
+	vcc5v0_usb_host: vcc5v0-usb-host-regulator {
+		compatible = "regulator-fixed";
+		enable-active-high;
+		gpio = <&gpio0 RK_PA6 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&vcc5v0_usb_host_en>;
+		regulator-name = "vcc5v0_usb_host";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		vin-supply = <&vcc5v0_usb>;
+	};
+
+	vcc5v0_usb_otg: vcc5v0-usb-otg-regulator {
+		compatible = "regulator-fixed";
+		enable-active-high;
+		gpio = <&gpio0 RK_PA5 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&vcc5v0_usb_otg_en>;
+		regulator-name = "vcc5v0_usb_otg";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		vin-supply = <&vcc5v0_usb>;
+	};
+
+	pcie30_avdd0v9: pcie30-avdd0v9-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "pcie30_avdd0v9";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <900000>;
+		regulator-max-microvolt = <900000>;
+		vin-supply = <&vcc3v3_sys>;
+	};
+
+	pcie30_avdd1v8: pcie30-avdd1v8-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "pcie30_avdd1v8";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		vin-supply = <&vcc3v3_sys>;
+	};
+
+	/* actually fed by vcc5v0_sys */
+	vcc3v3_pi6c: vcc3v3-pi6c-regulator {
+		compatible = "regulator-fixed";
+		enable-active-high;
+		gpios = <&gpio0 RK_PD4 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pi6c_enable_h>;
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-name = "vcc3v3_pi6c";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		vin-supply = <&vcc_3v3>;
+	};
+
+	vcc3v3_pcie: vcc3v3-pcie-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc3v3_pcie";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		/* wait for pi6c stable */
+		startup-delay-us = <50000>;
+		vin-supply = <&vcc3v3_pi6c>;
+	};
+
+	/* actually fed by vcc12v_dcin（官方同注释，vin-supply 按官方指向 vcc3v3_pcie） */
+	vcc3v3_minipcie: vcc3v3-minipcie-regulator {
+	regulator-always-on;
+	regulator-boot-on;
+	compatible = "regulator-fixed";
+	enable-active-high;
+		gpios = <&gpio0 RK_PC7 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&minipcie_enable_h>;
+		regulator-name = "vcc3v3_minipcie";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		vin-supply = <&vcc12v_dcin>;
+	};
+};
+
+&combphy0_us {
+	status = "okay";
+};
+
+&combphy1_usq {
+	status = "okay";
+};
+
+&combphy2_psq {
+	status = "okay";
+};
+
+&cpu0 {
+	cpu-supply = <&vdd_cpu>;
+};
+
+&cpu1 {
+	cpu-supply = <&vdd_cpu>;
+};
+
+&cpu2 {
+	cpu-supply = <&vdd_cpu>;
+};
+
+&cpu3 {
+	cpu-supply = <&vdd_cpu>;
+};
+
+&gmac0 {
+	assigned-clocks = <&cru SCLK_GMAC0_RX_TX>, <&cru SCLK_GMAC0>;
+	assigned-clock-parents = <&cru SCLK_GMAC0_RGMII_SPEED>;
+	assigned-clock-rates = <0>, <125000000>;
+	clock_in_out = "output";
+	/* 官方（同内核树 easepi-r1 / 本板厂商 6.12 DTB）的写法：phy-mode="rgmii" +
+	   tx_delay/rx_delay，RGMII 延迟全部由 MAC 侧产生，PHY 侧 2ns 由驱动关掉。
+	   为什么不用 "rgmii-id"：vendor dwmac-rk 的 PHY_INTERFACE_MODE_RGMII_ID 分支是
+	   set_to_rgmii(bsp, -1, -1)，DELAY_ENABLE 宏对 -1 取 *_DLY_DISABLE ⇒ 只留 PHY 侧
+	   2ns、MAC 侧全关，实测采样点临界（56B 丢 65% / 1400B 丢 90%，接口错误计数为 0）。
+	   本板取值取自厂商 T68M 6.12 出厂 DTB（gmii0: 0x3c/0x2f），不是照抄别的板子。 */
+	label = "lan1";
+	phy-mode = "rgmii";
+	tx_delay = <0x3c>;
+	rx_delay = <0x2f>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&gmac0_miim
+		     &gmac0_tx_bus2
+		     &gmac0_rx_bus2
+		     &gmac0_rgmii_clk
+		     &gmac0_rgmii_bus>;
+	snps,reset-gpio = <&gpio3 RK_PB7 GPIO_ACTIVE_LOW>;
+	snps,reset-active-low;
+	/* Reset time is 20ms, 100ms for rtl8211f */
+	snps,reset-delays-us = <0 20000 100000>;
+	phy-handle = <&rgmii_phy0>;
+	status = "okay";
+};
+
+&gmac1 {
+	assigned-clocks = <&cru SCLK_GMAC1_RX_TX>, <&cru SCLK_GMAC1>;
+	assigned-clock-parents = <&cru SCLK_GMAC1_RGMII_SPEED>;
+	assigned-clock-rates = <0>, <125000000>;
+	clock_in_out = "output";
+	/* 同 gmac0：官方 rgmii + MAC 侧延迟写法；本板 gmac1 取值取自厂商 6.12 出厂 DTB
+	   （0x42/0x28）。两个千兆口同源同修，只改一个 = 另一个继续丢包。 */
+	label = "lan2";
+	phy-mode = "rgmii";
+	tx_delay = <0x42>;
+	rx_delay = <0x28>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&gmac1m1_miim
+		     &gmac1m1_tx_bus2
+		     &gmac1m1_rx_bus2
+		     &gmac1m1_rgmii_clk
+		     &gmac1m1_rgmii_bus>;
+	snps,reset-gpio = <&gpio3 RK_PB0 GPIO_ACTIVE_LOW>;
+	snps,reset-active-low;
+	/* Reset time is 20ms, 100ms for rtl8211f */
+	snps,reset-delays-us = <0 20000 100000>;
+	phy-handle = <&rgmii_phy1>;
+	status = "okay";
+};
+
+&gpu {
+	mali-supply = <&vdd_gpu>;
+	status = "okay";
+};
+
+&hdmi {
+	avdd-0v9-supply = <&vdda0v9_image>;
+	avdd-1v8-supply = <&vcca1v8_image>;
+	/* HDMI PHY 校准表：照抄同内核树官方 EVB（rk3568-evb.dtsi），不自造。 */
+	rockchip,phy-table =
+		<92812500  0x8009 0x0000 0x0270>,
+		<165000000 0x800b 0x0000 0x026d>,
+		<185625000 0x800b 0x0000 0x01ed>,
+		<297000000 0x800b 0x0000 0x01ad>,
+		<594000000 0x8029 0x0000 0x0088>,
+		<000000000 0x0000 0x0000 0x0000>;
+	/* BSP 的 rk356x.dtsi 只给了 port@0(hdmi_in_vp0/vp1，进)，**故意不补 port@1**：
+	   输出端口由 BSP dw-hdmi 自己创建（与根节点 hdmi-con 成对删除，见文件上方注释）。
+	   路由方向由下面 &route_hdmi { connect = <&vp0_out_hdmi>; } 指定。
+	   注意：dtc 要求属性必须写在子节点之前，status 不能放在 ports 后面。 */
+	status = "okay";
+};
+
+&hdmi_in_vp0 {
+	status = "okay";
+};
+
+&hdmi_in_vp1 {
+	status = "disabled";
+};
+
+/* HDMI 路由：BSP 的 display-subsystem 里 route-hdmi 默认是
+   「disabled + connect = <&vp1_out_hdmi>」。不覆盖它，显示子系统就找不到
+   可用的 HDMI 路由（实测 dmesg: drm_bridge_attach -22、hdmi probe 失败、
+   /sys/class/drm 下没有任何 HDMI 连接器）。官方 EVB 的写法就是下面这两行。 */
+&route_hdmi {
+	status = "okay";
+	connect = <&vp0_out_hdmi>;
+};
+
+&hdmi_sound {
+	status = "okay";
+};
+
+&i2c0 {
+	status = "okay";
+
+	vdd_cpu: regulator@1c {
+		compatible = "tcs,tcs4525";
+		reg = <0x1c>;
+		fcs,suspend-voltage-selector = <1>;
+		regulator-name = "vdd_cpu";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <800000>;
+		regulator-max-microvolt = <1150000>;
+		regulator-ramp-delay = <2300>;
+		vin-supply = <&vcc5v0_sys>;
+
+		regulator-state-mem {
+			regulator-off-in-suspend;
+		};
+	};
+
+	rk809: pmic@20 {
+		compatible = "rockchip,rk809";
+		reg = <0x20>;
+		interrupt-parent = <&gpio0>;
+		interrupts = <RK_PA3 IRQ_TYPE_LEVEL_LOW>;
+		assigned-clocks = <&cru I2S1_MCLKOUT_TX>;
+		assigned-clock-parents = <&cru CLK_I2S1_8CH_TX>;
+		#clock-cells = <1>;
+		clock-names = "mclk";
+		clocks = <&cru I2S1_MCLKOUT_TX>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pmic_int>, <&i2s1m0_mclk>;
+		rockchip,system-power-controller;
+		#sound-dai-cells = <0>;
+		wakeup-source;
+
+		vcc1-supply = <&vcc3v3_sys>;
+		vcc2-supply = <&vcc3v3_sys>;
+		vcc3-supply = <&vcc3v3_sys>;
+		vcc4-supply = <&vcc3v3_sys>;
+		vcc5-supply = <&vcc3v3_sys>;
+		vcc6-supply = <&vcc3v3_sys>;
+		vcc7-supply = <&vcc3v3_sys>;
+		vcc8-supply = <&vcc3v3_sys>;
+		vcc9-supply = <&vcc3v3_sys>;
+
+		regulators {
+			vdd_logic: DCDC_REG1 {
+				regulator-name = "vdd_logic";
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-initial-mode = <0x2>;
+				regulator-min-microvolt = <500000>;
+				regulator-max-microvolt = <1350000>;
+				regulator-ramp-delay = <6001>;
+
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vdd_gpu: DCDC_REG2 {
+				regulator-name = "vdd_gpu";
+				regulator-always-on;
+				regulator-initial-mode = <0x2>;
+				regulator-min-microvolt = <500000>;
+				regulator-max-microvolt = <1350000>;
+				regulator-ramp-delay = <6001>;
+
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vcc_ddr: DCDC_REG3 {
+				regulator-name = "vcc_ddr";
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-initial-mode = <0x2>;
+
+				regulator-state-mem {
+					regulator-on-in-suspend;
+				};
+			};
+
+			vdd_npu: DCDC_REG4 {
+				regulator-name = "vdd_npu";
+				regulator-initial-mode = <0x2>;
+				regulator-min-microvolt = <500000>;
+				regulator-max-microvolt = <1350000>;
+				regulator-ramp-delay = <6001>;
+
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vcc_1v8: DCDC_REG5 {
+				regulator-name = "vcc_1v8";
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vdda0v9_image: LDO_REG1 {
+				regulator-name = "vdda0v9_image";
+				regulator-min-microvolt = <950000>;
+				regulator-max-microvolt = <950000>;
+
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vdda_0v9: LDO_REG2 {
+				regulator-name = "vdda_0v9";
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vdda0v9_pmu: LDO_REG3 {
+				regulator-name = "vdda0v9_pmu";
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+
+				regulator-state-mem {
+					regulator-on-in-suspend;
+					regulator-suspend-microvolt = <900000>;
+				};
+			};
+
+			vccio_acodec: LDO_REG4 {
+				regulator-name = "vccio_acodec";
+				regulator-always-on;
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vccio_sd: LDO_REG5 {
+				regulator-name = "vccio_sd";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <3300000>;
+
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vcc3v3_pmu: LDO_REG6 {
+				regulator-name = "vcc3v3_pmu";
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+
+				regulator-state-mem {
+					regulator-on-in-suspend;
+					regulator-suspend-microvolt = <3300000>;
+				};
+			};
+
+			vcca_1v8: LDO_REG7 {
+				regulator-name = "vcca_1v8";
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vcca1v8_pmu: LDO_REG8 {
+				regulator-name = "vcca1v8_pmu";
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+
+				regulator-state-mem {
+					regulator-on-in-suspend;
+					regulator-suspend-microvolt = <1800000>;
+				};
+			};
+
+			vcca1v8_image: LDO_REG9 {
+				regulator-name = "vcca1v8_image";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vcc_3v3: SWITCH_REG1 {
+				regulator-name = "vcc_3v3";
+				regulator-always-on;
+				regulator-boot-on;
+
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vcc3v3_sd: SWITCH_REG2 {
+				regulator-name = "vcc3v3_sd";
+
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+		};
+	};
+};
+
+&i2s0_8ch {
+	status = "okay";
+};
+
+&i2s1_8ch {
+	rockchip,trcm-sync-tx-only;
+	status = "okay";
+};
+
+&mdio0 {
+	/* EEE（IEEE 802.3az / LPI）：**只关 1000BASE-T**，用内核官方机制 eee-broken-1000t。
+	   依据（2026-10-28 实机定案）：
+	   · 本口 PHY = RTL8211F，链路上 EEE 处于 active，LPI 进出已 1568/1570 次，
+	     `phy_eee_wakeup_error_n=1`（即 MDIO_PCS_EEE_WK_ERR 记录到一次唤醒序列失败）；
+	   · 故障现象：carrier 仍在、协商速率仍是 1000M，但该口收不到包，下级设备 DHCP 拿不到
+	     地址 → 30 s 后自分配 169.254；拔插网线（强制重新协商）即恢复；
+	   · 机制：stmmac_main.c:1090 `phy_init_eee(phy, !rx_clk_runs_in_lpi)`，而该内核里
+	     `rx_clk_runs_in_lpi` 无任何赋值入口 ⇒ 恒为 0 ⇒ phy.c:1355-1358 给 PHY 打开
+	     `MDIO_PCS_CTRL1_CLKSTOP_EN`（LPI 期间停 xMII RX 时钟）⇒ 来包要先唤醒时钟，唤醒
+	     竞争失败即丢帧。官方 R1 走的是同一条代码路径，它没犯只是因为对端/走线没触发。
+	   · 处置：phy-core.c:385 读本属性 → eee_broken_modes |= MDIO_EEE_1000T →
+	     phy.c:1454 在写 MDIO_AN_EEE_ADV 时把 1000T 从通告里剔掉并重新协商 ⇒ 1G 的 EEE
+	     不再协商，100M 与两个 2.5G 口（RTL8125，另一套驱动）完全不受影响。
+	     同一棵内核树里有 18 个厂商 DTS 用同一写法（imx8mp-evk、fsl-ls1028a-kontron、
+	     meson-g12a-x96-max、am335x-baltos 等），属标准做法。 */
+	rgmii_phy0: ethernet-phy@0 {
+		compatible = "ethernet-phy-ieee802.3-c22";
+		reg = <0>;
+		realtek,led-data = <0x6151>;
+		eee-broken-1000t;
+	};
+};
+
+&mdio1 {
+	/* eth1(GMAC1) 同为 RTL8211F：与 eth0 同源同修，只关 1000BASE-T 的 EEE。
+	   两个千兆口必须一起改 —— 只改一个，另一个仍会进 LPI、仍会偶发丢包。 */
+	rgmii_phy1: ethernet-phy@0 {
+		compatible = "ethernet-phy-ieee802.3-c22";
+		reg = <0>;
+		realtek,led-data = <0x6151>;
+		eee-broken-1000t;
+	};
+};
+
+&pcie2x1 {
+	reset-gpios = <&gpio3 RK_PC1 GPIO_ACTIVE_HIGH>;
+	vpcie3v3-supply = <&vcc3v3_minipcie>;
+	status = "disabled";
+};
+
+&sata2 {
+	status = "okay";
+};
+
+&pcie30phy {
+	data-lanes = <1 2>;
+	status = "okay";
+};
+
+&pcie3x1 {
+	num-lanes = <1>;
+	/* 1+1（两路独立 x1）：BSP 的 rk3568.dtsi 在本节点就注释着这条属性要求
+	   'rockchip,bifurcation; laneN when using 1+1'。不开分叉时 PCIe3 PHY 停在
+	   聚合模式，只有一路 x1 能训练成功——实测另一路 dmesg 停在
+	   'PCIe Linking... LTSSM is 0x1' 且 lspci 里少一个 RTL8125。
+	   同内核树的其他 rk3568 NAS 板（hinlink-h6xk / radxa-e25 / easepi-a2）同样开启。 */
+	rockchip,bifurcation;
+	reset-gpios = <&gpio3 RK_PA1 GPIO_ACTIVE_HIGH>;
+	vpcie3v3-supply = <&vcc3v3_pcie>;
+	status = "okay";
+
+	pcie@0,0 {
+		reg = <0x00100000 0 0 0 0>;
+		#address-cells = <3>;
+		#size-cells = <2>;
+
+		rtl8125_1: pcie-eth@10,0 {
+			compatible = "pci10ec,8125";
+			reg = <0x000000 0 0 0 0>;
+			label = "lan4";
+		};
+	};
+};
+
+&pcie3x2 {
+	num-lanes = <1>;
+	/* 1+1（两路独立 x1）：BSP 的 rk3568.dtsi 在本节点就注释着这条属性要求
+	   'rockchip,bifurcation; laneN when using 1+1'。不开分叉时 PCIe3 PHY 停在
+	   聚合模式，只有一路 x1 能训练成功——实测另一路 dmesg 停在
+	   'PCIe Linking... LTSSM is 0x1' 且 lspci 里少一个 RTL8125。
+	   同内核树的其他 rk3568 NAS 板（hinlink-h6xk / radxa-e25 / easepi-a2）同样开启。 */
+	rockchip,bifurcation;
+	reset-gpios = <&gpio2 RK_PD6 GPIO_ACTIVE_HIGH>;
+	vpcie3v3-supply = <&vcc3v3_pcie>;
+	status = "okay";
+
+	pcie@0,0 {
+		reg = <0x00200000 0 0 0 0>;
+		#address-cells = <3>;
+		#size-cells = <2>;
+
+		rtl8125_2: pcie-eth@20,0 {
+				compatible = "pci10ec,8125";
+				reg = <0x000000 0 0 0 0>;
+				label = "lan3";
+			};
+	};
+};
+
+&pinctrl {
+	/* 卡的检测脚必须**只由 GPIO 这一份 pinctrl 占着**：
+	   基线里 `sdmmc0_det` 是 `<0 RK_PA4 1 ...>`（mux 1），而本节点又用
+	   `cd-gpios = <&gpio0 RK_PA4 ...>` 把同一根脚申请成 GPIO ⇒ 内核每次开机都打
+	   `pin 4 already requested by fe2b0000.mmc; switch mux 1 to GPIO` + WARNING 栈
+	   （pinctrl-rockchip.c rockchip_pmx_gpio_set_direction）。
+	   改为用下面这个 RK_FUNC_GPIO 组替代 `&sdmmc0_det`：pull-up 保留、mux 只有 GPIO 一个owner。
+	   注：组必须**直接挂在 /pinctrl 下**（不要再套一层容器），CI 断言的就是 /pinctrl/sdmmc0-cd-gpio。 */
+	sdmmc0_cd_gpio: sdmmc0-cd-gpio {
+		rockchip,pins = <0 RK_PA4 RK_FUNC_GPIO &pcfg_pull_up>;
+	};
+
+	leds {
+		led_power_pin: led-power-pin {
+			rockchip,pins = <4 RK_PC6 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+
+		led_status_pin: led-status-pin {
+			rockchip,pins = <4 RK_PC5 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
+	pcie {
+		minipcie_enable_h: minipcie-enable-h {
+			rockchip,pins = <0 RK_PC7 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+
+		pi6c_enable_h: pi6c-enable-h {
+			rockchip,pins = <0 RK_PD4 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
+	sdio-pwrseq {
+		wifi_enable_h: wifi-enable-h {
+			rockchip,pins = <3 RK_PD5 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+
+	pmic {
+		pmic_int: pmic_int {
+			rockchip,pins = <0 RK_PA3 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+
+	rockchip-key {
+		reset_button_pin: reset-button-pin {
+			rockchip,pins = <3 RK_PB1 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+
+	usb {
+		vcc5v0_usb_host_en: vcc5v0_usb_host_en {
+			rockchip,pins = <0 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+
+		vcc5v0_usb_otg_en: vcc5v0_usb_otg_en {
+			rockchip,pins = <0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+};
+
+&pmu_io_domains {
+	pmuio1-supply = <&vcc3v3_pmu>;
+	pmuio2-supply = <&vcc3v3_pmu>;
+	vccio1-supply = <&vccio_acodec>;
+	vccio2-supply = <&vcc_1v8>;
+	vccio3-supply = <&vccio_sd>;
+	vccio4-supply = <&vcc_1v8>;
+	vccio5-supply = <&vcc_3v3>;
+	vccio6-supply = <&vcc_1v8>;
+	vccio7-supply = <&vcc_3v3>;
+	status = "okay";
+};
+
+&saradc {
+	vref-supply = <&vcca_1v8>;
+	status = "okay";
+};
+
+&sdhci {
+	bus-width = <8>;
+	max-frequency = <200000000>;
+	non-removable;
+	pinctrl-names = "default";
+	pinctrl-0 = <&emmc_bus8 &emmc_clk &emmc_cmd &emmc_datastrobe>;
+	vmmc-supply = <&vcc_3v3>;
+	vqmmc-supply = <&vcc_1v8>;
+	status = "okay";
+};
+
+&sdmmc0 {
+	bus-width = <4>;
+	cap-sd-highspeed;
+	cd-gpios = <&gpio0 RK_PA4 GPIO_ACTIVE_LOW>;
+	disable-wp;
+	pinctrl-names = "default";
+	pinctrl-0 = <&sdmmc0_bus4 &sdmmc0_clk &sdmmc0_cmd &sdmmc0_cd_gpio>;
+	sd-uhs-sdr50;
+	vmmc-supply = <&vcc3v3_sd>;
+	vqmmc-supply = <&vccio_sd>;
+	status = "okay";
+};
+
+&tsadc {
+	rockchip,hw-tshut-mode = <1>;
+	rockchip,hw-tshut-polarity = <0>;
+	status = "okay";
+};
+
+&uart2 {
+	status = "okay";
+};
+
+&usb_host0_ehci {
+	status = "okay";
+};
+
+&usb_host0_ohci {
+	status = "okay";
+};
+
+&usbdrd_dwc3 {
+	extcon = <&usb2phy0>;
+	status = "okay";
+};
+
+&usb_host1_ehci {
+	status = "okay";
+};
+
+&usb_host1_ohci {
+	status = "okay";
+};
+
+&usbhost_dwc3 {
+	status = "okay";
+};
+
+&usb2phy0 {
+	status = "okay";
+};
+
+&usb2phy0_host {
+	phy-supply = <&vcc5v0_usb_host>;
+	status = "okay";
+};
+
+&usb2phy0_otg {
+	phy-supply = <&vcc5v0_usb_otg>;
+	status = "okay";
+};
+
+&usb2phy1 {
+	status = "okay";
+};
+
+&u2phy1_host {
+	phy-supply = <&vcc5v0_usb_host>;
+	status = "okay";
+};
+
+&u2phy1_otg {
+	phy-supply = <&vcc5v0_usb_host>;
+	status = "okay";
+};
+
+&vop {
+	assigned-clocks = <&cru DCLK_VOP0>, <&cru DCLK_VOP1>;
+	assigned-clock-parents = <&pmucru PLL_HPLL>, <&cru PLL_VPLL>;
+	status = "okay";
+};
+
+&vop_mmu {
+	status = "okay";
+};
+
+/* vp0_out_hdmi 已由 BSP rk356x.dtsi 定义，此处不再重复 */
+
+&sdmmc2 {
+	bus-width = <4>;
+	cap-sd-highspeed;
+	cap-sdio-irq;
+	disable-wp;
+	keep-power-in-suspend;
+	mmc-pwrseq = <&sdio_pwrseq>;
+	non-removable;
+	pinctrl-names = "default";
+	pinctrl-0 = <&sdmmc2m0_bus4 &sdmmc2m0_clk &sdmmc2m0_cmd>;
+	sd-uhs-sdr104;
+	supports-sdio;
+	vmmc-supply = <&vcc3v3_sys>;
+	vqmmc-supply = <&vcc_1v8>;
+	status = "okay";
+};
+
+/* ══════════════════════════════════════════════════════════════════
+ * 补齐 SoC IP 块使能（原文件缺失，导致半块 SoC 能力被关掉）
+ *
+ * 背景：本文件源自 immortalwrt 的板级 DTS，只 #include 了 rk3568.dtsi；
+ * 而 armbian 官方板级（如 EasePi R1）的做法是继承完整基线
+ * rk3568-roc-k40pro.dtsi —— 那些 IP 块是在基线里逐个开启的。
+ * 缺失后果：视频硬编解码（jellyfin-ffmpeg/rkmpp）不可用、RGA/IEP/JPEG
+ * 图像加速不可用、硬件随机数不可用、DDR 调频监控(dfi)不可用。
+ *
+ * 以下各块**照抄官方基线 rk3568-roc-k40pro.dtsi 的原文**（同一内核树，
+ * 标签必然存在）。刻意保持一致的两项：
+ *   - dmc：官方基线里就是 disabled（不开 DDR 调频），此处不动
+ *   - npu：厂商出厂 T68M 设备树里亦为 disabled，此处同样保持关闭
+ * ══════════════════════════════════════════════════════════════════ */
+&dfi {
+	status = "okay";
+};
+
+&iep {
+	status = "okay";
+};
+
+&iep_mmu {
+	status = "okay";
+};
+
+&jpegd {
+	status = "okay";
+};
+
+&jpegd_mmu {
+	status = "okay";
+};
+
+/* 硬件编解码服务节点：官方 EVB 显式开启。缺它则 /dev/mpp_service 不存在，
+   rkmpp（jellyfin/ffmpeg 硬转码等）报 "open vcodec_service failed"。 */
+&mpp_srv {
+	status = "okay";
+};
+
+&rk_rga {
+	status = "okay";
+};
+
+&rkvdec {
+	status = "okay";
+};
+
+&rkvdec_mmu {
+	status = "okay";
+};
+
+&rkvenc {
+	venc-supply = <&vdd_logic>;
+	status = "okay";
+};
+
+&rkvenc_mmu {
+	status = "okay";
+};
+
+&rng {
+	status = "okay";
+};
+
+&vdpu {
+	status = "okay";
+};
+
+&vdpu_mmu {
+	status = "okay";
+};
+
+&vepu {
+	status = "okay";
+};
+
+&vepu_mmu {
+	status = "okay";
+};
+
+/* ══════════════════════════════════════════════════════════════════
+ * USB3 / DWC3 的两个 glue 父节点必须显式使能（2026-10 实机定位）
+ *
+ * 陷阱：&usbdrd_dwc3 / &usbhost_dwc3 只使能了**子节点**；父节点
+ * usbdrd30/usbhost30 在内核 dtsi 里默认 disabled，父节点关着时整棵子树
+ * 都不会实例化 —— 表现是 /sys/bus/platform/devices 里根本没有
+ * fd000000.usb / fcc00000.usb，两个 DWC3（xHCI）控制器完全不存在，
+ * 于是走该 USB 通道的 4G 模块永远枚举不到（ModemManager 报
+ * No modems were found），而 lyw/iStoreOS 那套同板固件能认到同一模块。
+ * 官方 Easepi-r1（同一颗 6.1.115-vendor-rk35xx 内核）的 usbdrd30/usbhost30
+ * 都是 okay，此处照办。
+ * ══════════════════════════════════════════════════════════════════ */
+&usbdrd30 {
+	status = "okay";
+};
+
+&usbhost30 {
+	status = "okay";
+};
