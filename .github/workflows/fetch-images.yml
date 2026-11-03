@@ -1,0 +1,54 @@
+name: fetch-images
+
+# FriendlyElec's downloads.friendlyelec.com ignores Range requests (a request for
+# bytes 0-99 comes back as HTTP 200 with the whole file stream), so an interrupted
+# download can never be resumed -- every retry restarts from byte 0. The gitea ->
+# Azure path is fine, but the home link to that CDN is both slow (~300-850 KB/s)
+# and drop-prone. So: pull it once from an Azure runner and hand it back as an
+# artifact, which downloads over GitHub's own CDN.
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: source tgz url
+        required: false
+        default: https://downloads.friendlyelec.com/os-images/rk3568/images/android-14-images-20251222.tgz
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Download
+        run: |
+          URL="${{ github.event.inputs.url }}"
+          echo "url: $URL"
+          for i in 1 2 3 4 5 6; do
+            curl -L --fail --connect-timeout 20 --max-time 5400 \
+                 --retry 5 --retry-delay 10 --retry-all-errors \
+                 -o images.tgz "$URL" && break
+            echo "attempt $i failed, size now: $(stat -c %s images.tgz 2>/dev/null || echo 0)"
+            sleep 15
+          done
+          ls -l images.tgz
+          echo "### downloaded" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls -l images.tgz >> "$GITHUB_STEP_SUMMARY"
+          sha256sum images.tgz >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Split into <1.5 GiB parts (artifact friendliness)
+        run: |
+          split -b 1500M -d images.tgz part-
+          ls -l part-* | head
+          sha256sum images.tgz | tee images.tgz.sha256
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-14-images
+          path: |
+            part-*
+            images.tgz.sha256
+          compression-level: 0
+          retention-days: 7
