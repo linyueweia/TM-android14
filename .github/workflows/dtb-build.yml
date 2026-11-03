@@ -12,10 +12,21 @@ jobs:
 
       - name: Partial clone SDK (kernel-6.1 only)
         run: |
-          git clone --depth 1 --filter=blob:none --sparse \
-            http://112.124.9.243:3000/friendlyelec/rk35xx-android14.git sdk
+          URL=http://112.124.9.243:3000/friendlyelec/rk35xx-android14.git
+          for i in 1 2 3 4 5; do
+            rm -rf sdk
+            if git clone --depth 1 --filter=blob:none --sparse "$URL" sdk; then
+              cd sdk
+              if git sparse-checkout set kernel-6.1; then
+                echo "CLONE_OK attempt=$i"; break
+              fi
+              cd ..
+            fi
+            echo "clone attempt $i failed, retry in 45s"
+            sleep 45
+          done
+          [ -d sdk/kernel-6.1 ] || { echo CLONE_FAILED; exit 1; }
           cd sdk
-          git sparse-checkout set kernel-6.1
           du -sh .git kernel-6.1
           df -h /
 
