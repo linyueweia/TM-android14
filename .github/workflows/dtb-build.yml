@@ -20,7 +20,17 @@ jobs:
       # cwd for the rest of the step and made the `[ -d sdk/kernel-6.1 ]` check fail
       # even when the clone succeeded (run 41589698027 stopped at CLONE_FAILED after
       # CLONE_OK attempt=1).
+      # The gitea -> Azure-runner path is the slow part (39-54 min, sometimes hangs
+      # outright). Cache the sparse kernel tree so only the first run pays for it.
+      - name: Restore SDK kernel tree from cache
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: sdk
+          key: rk35xx-a14-kernel6.1-v1
+
       - name: Partial clone SDK (kernel-6.1 only)
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
         run: |
           URL=http://112.124.9.243:3000/friendlyelec/rk35xx-android14.git
           ok=0
