@@ -67,38 +67,47 @@ jobs:
         run: |
           set -euxo pipefail
           cd usb
-          git clone --depth 1 https://github.com/rockchip-linux/rkbin.git /tmp/rkbin || true
-          TOOLS=/tmp/rkbin/tools/linux/Linux_Pack_Firmware/rockdev
-          ls -l "$TOOLS" || true
-          chmod +x "$TOOLS"/afptool "$TOOLS"/rkImageMaker 2>/dev/null || true
+          # afptool / rkImageMaker 不在 rkbin 里（那仓只有固件 bin），在 RKTools 里
+          rm -rf /tmp/rktools
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/rockchip-toybrick/RKTools.git /tmp/rktools
+          git -C /tmp/rktools sparse-checkout set linux/Linux_Pack_Firmware/rockdev
+          TOOLS=/tmp/rktools/linux/Linux_Pack_Firmware/rockdev
+          ls -l "$TOOLS"
+          chmod +x "$TOOLS"/afptool "$TOOLS"/rkImageMaker
+          file "$TOOLS"/afptool "$TOOLS"/rkImageMaker || true
+          "$TOOLS/afptool" --help 2>&1 | head -5 || true
 
-          grep -oE '\([a-z0-9_]+' parameter.txt | tr -d '(' | sort -u > /tmp/allparts.txt || true
-          cat /tmp/allparts.txt || true
+          # package-file：分区名从 parameter.txt 的 CMDLINE 取，只列有文件的
+          PARTS=$(sed -n 's/.*CMDLINE:[^:]*://p' parameter.txt | tr ',' '\n' | sed -n 's/.*(\([a-z0-9_]*\).*/\1/p' | sed 's/:.*//')
+          echo "$PARTS"
           {
-            printf '# NAME\tPATH\n'
-            printf 'package-file\tpackage-file\n'
+            printf '# NAME\tPATH\tTYPE\n'
+            printf 'package-file\tpackage-file\tupdate-script\n'
             printf 'parameter\tparameter.txt\n'
             printf 'bootloader\tMiniLoaderAll.bin\n'
+            for p in $PARTS; do
+              [ "$p" = "bootloader" ] && continue
+              [ -f "$p.img" ] && printf '%s\t%s.img\n' "$p" "$p"
+            done
           } > package-file
-          while read -r p; do
-            [ -n "$p" ] || continue
-            [ "$p" = "bootloader" ] && continue
-            [ -f "$p.img" ] && printf '%s\t%s.img\n' "$p" "$p" >> package-file
-          done < /tmp/allparts.txt
           cat package-file
 
-          "$TOOLS/afptool" -pack ./ update.tmp
-          "$TOOLS/rkImageMaker" -RK3568 MiniLoaderAll.bin update.tmp update.img
-          rm -f update.tmp package-file
+          "$TOOLS/afptool" -pack ./ update.raw.img
+          # TAG 从 MiniLoaderAll.bin 偏移 21 读 4 字节（如 3568 -> RK3568），不能写死
+          TAG=RK$(hexdump -s 21 -n 4 -e '4 "%c"' MiniLoaderAll.bin | rev)
+          echo "TAG=$TAG"
+          "$TOOLS/rkImageMaker" -${TAG} MiniLoaderAll.bin update.raw.img update.img -os_type:androidos
+          rm -f update.raw.img package-file
           ls -l update.img
           sha256sum update.img
 
       - name: Pack partitions zip
+        if: always()
         run: |
           set -euxo pipefail
           cd usb
           cp ../docs/usb-flash-readme.txt 说明.txt
-          zip -r ../t68m-android14-usb-partitions.zip . -x 'update.tmp'
+          zip -r ../t68m-android14-usb-partitions.zip . -x 'update.raw.img'
           ls -l ../t68m-android14-usb-partitions.zip
 
       - name: Evidence
