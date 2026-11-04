@@ -19,12 +19,41 @@ GitHub Actions（ubuntu-latest）分两步走：
 
 - [x] 仓库创建
 - [x] probe 通过（runner 磁盘余量 + gitea 可达性判据）
-- [x] T68M DTS 移植进 Android SDK 内核树 → `dist/rk3568-lyt-t68m-android.dtb`（172,191 B，NPU/optee/cma/ramoops 已开）
+- [x] T68M DTS 移植进 Android SDK 内核树 → `dist/rk3568-lyt-t68m-android.dtb`
 - [x] 镜像产出：SD / eflasher / USB(update.img) 三条流水线
 - [x] boot header SHA1 修正器 `tools/rk_boot_id.py`（**11-03 的产物缺这一步，全部不可启动**，见 `docs/t68m-android14-plan.md` §7）
-- [ ] 实机启动验证：串口第四行要看到 `ANDROID: Hash OK`，再看到内核日志
+- [x] **实机跑通（TF 卡，2026-11-05）**：HDMI 出画面、进桌面、点「重启」能真正重启
+
+## 实机结果
+
+| 项 | 值 |
+|---|---|
+| 冷启动到桌面 | 162.7 s（首启含 dexopt）/ 74.0 s（之后） |
+| 重启到桌面 | 74.0 s |
+| hwcomposer 崩溃 | 0 次 |
+| 板级 DTB | 172,541 B（`dist/rk3568-lyt-t68m-android.dtb`） |
+| boot.img | 58,161,152 B，`id@0x240 = fa48d672…`，`rk_boot_id.py check` = MATCH |
+
+串口实证的关键几行：
+
+```
+DDR 03ea844c5d typ 24/09/03-10:42:57,fwver: v1.23
+Bootdev(atags): mmc 1
+MMC1: Legacy, 52Mhz
+DTB: rk3568-nanopi5-rev0f.dtb (172541)
+vp0 assign plane mask: Cluster0|Cluster1|Esmart0|Esmart1[0xf], primary plane phy id: Esmart0[2]
+rockchip-drm display-subsystem: bound fe040000.vop
+reboot: Restarting system with command 'userrequested'   ← 之后重新出现 DDR/U-Boot SPL
+```
+
+一共打通 **9 个断点**：eMMC RKNS 清零、misc BCB、OP-TEE `devnum`、NPU+iommu panic、
+SD 控制器 pinctrl 层级、super sparse→raw、A/B tries 扣光、vop plane 绑定、
+**reboot → MaskROM（TF 卡被 `mmc_power_off()` 断电）**。
+
+完整修法、判据、时间线、回滚见 **`docs/tfcard-android14-runbook.md`**。
 
 ## 现状一句话
 
-板级这一侧已闭环（DTB 命中、hwrev 16 槽铺满、boot 摘要自校正），剩下的是**上电**：
-DDR 配置表能否带起 T68M 颗粒、NPU 在 Android 14 上是否 panic。两者都只在实机串口里现形。
+从厂商包到「HDMI 出桌面 + 重启可用」已全链路跑通，**改的只是一个 DTB**（外加重算 boot header 摘要）。
+剩下的都是优化项，不是功能缺陷：second 段瘦身（31 个别的板子的 DTB 白占 6.34 MB）、
+A/B `tries-remain` 恢复成 7。

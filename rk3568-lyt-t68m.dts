@@ -515,6 +515,12 @@
 				regulator-name = "vccio_sd";
 				regulator-min-microvolt = <1800000>;
 				regulator-max-microvolt = <3300000>;
+				/* 这张卡是**系统盘**，供电不能被 reboot 路径关掉：
+				   mmc_power_off() 会 regulator_disable(vmmc/vqmmc)，
+				   而 reboot 不复位 PMIC → 开关保持关闭 → BootROM 找不到启动介质
+				   → 进 MaskROM（现象：黑屏、串口零输出，看着像关机）。
+				   见 docs/tfcard-android14-runbook.md 第 9 条 / 台账 H1。 */
+				regulator-always-on;
 
 				regulator-state-mem {
 					regulator-off-in-suspend;
@@ -581,6 +587,9 @@
 
 			vcc3v3_sd: SWITCH_REG2 {
 				regulator-name = "vcc3v3_sd";
+				/* 同上：TF 卡 VCC 必须常开，否则重启后卡没电 → MaskROM。
+				   这是 T68M 上「点重启变关机」的唯一根因。 */
+				regulator-always-on;
 
 				regulator-state-mem {
 					regulator-off-in-suspend;
@@ -706,9 +715,17 @@
 	   `pin 4 already requested by fe2b0000.mmc; switch mux 1 to GPIO` + WARNING 栈
 	   （pinctrl-rockchip.c rockchip_pmx_gpio_set_direction）。
 	   改为用下面这个 RK_FUNC_GPIO 组替代 `&sdmmc0_det`：pull-up 保留、mux 只有 GPIO 一个owner。
-	   注：组必须**直接挂在 /pinctrl 下**（不要再套一层容器），CI 断言的就是 /pinctrl/sdmmc0-cd-gpio。 */
-	sdmmc0_cd_gpio: sdmmc0-cd-gpio {
-		rockchip,pins = <0 RK_PA4 RK_FUNC_GPIO &pcfg_pull_up>;
+
+	   **必须挂在 /pinctrl/sdmmc0/ 这一层，不能直接挂 /pinctrl 下**（2026-11-04 实机推翻旧写法）。
+	   rockchip pinctrl 把 /pinctrl 的**顶层**节点当"功能(function)"解析，
+	   只有功能节点**下面**的子节点才是"引脚组(group)"。挂错层时开机报
+	     rockchip-pinctrl: unable to find group for node sdmmc0-cd-gpio
+	   并且 fe2b0000.mmc 的 probe **静默失败**（不在 devices_deferred、没有 defer 日志、
+	   regulators 照常被 disabling），表现就是"TF 卡在系统里压根不出现"，极难定位。 */
+	sdmmc0 {
+		sdmmc0_cd_gpio: sdmmc0-cd-gpio {
+			rockchip,pins = <0 RK_PA4 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
 	};
 
 	leds {
@@ -794,9 +811,13 @@
 	cap-sd-highspeed;
 	cd-gpios = <&gpio0 RK_PA4 GPIO_ACTIVE_LOW>;
 	disable-wp;
+	/* 不要 UHS。厂商基线里的 sd-uhs-sdr50 会让卡切到 1.8V signaling，
+	   而这张卡是**系统盘**：重启（热复位）时卡不会掉电，仍停在 1.8V 状态，
+	   BootROM 用 3.3V 电平去握手就认不到卡。no-1-8-v 显式禁止 1.8V 切换，
+	   代价只是从 SDR50(104MB/s) 降到 high-speed(50MHz)，对 TF 卡启动本来就够。 */
+	no-1-8-v;
 	pinctrl-names = "default";
 	pinctrl-0 = <&sdmmc0_bus4 &sdmmc0_clk &sdmmc0_cmd &sdmmc0_cd_gpio>;
-	sd-uhs-sdr50;
 	vmmc-supply = <&vcc3v3_sd>;
 	vqmmc-supply = <&vccio_sd>;
 	status = "okay";
@@ -869,6 +890,30 @@
 	assigned-clocks = <&cru DCLK_VOP0>, <&cru DCLK_VOP1>;
 	assigned-clock-parents = <&pmucru PLL_HPLL>, <&cru PLL_VPLL>;
 	status = "okay";
+
+	/* vop2 的每个 port 必须显式声明 plane 绑定。
+	   缺这两条时 vop2_create_crtc 打
+	     "No primary plane find for video_port0"
+	   → rockchip-drm probe 失败（-19）→ 没有 /dev/dri/card0
+	   → hwcomposer-3 每秒 SIGABRT：Check failed: halImpl != nullptr
+	   → 表面上看是"卡在开机 logo"，其实是显示子系统整条链没起来。
+	   值取自 BSP rk3568-evb 的 vop 配置：vp0 = Cluster0/1 + Esmart0/1（mask 0x0f），
+	   primary = Esmart0（phy id 2）；vp1 = Smart0/1（mask 0x30），primary = Smart0（4）。 */
+	ports {
+		port@0 {
+			rockchip,plane-mask = <0x0f>;
+			rockchip,primary-plane = <0x02>;
+		};
+
+		port@1 {
+			rockchip,plane-mask = <0x30>;
+			rockchip,primary-plane = <0x04>;
+		};
+
+		port@2 {
+			status = "disabled";
+		};
+	};
 };
 
 &vop_mmu {
@@ -915,17 +960,21 @@
  *   - Android 14 这份 SDK 的板级基线（rk3568-nanopi5-rev01.dtb）里
  *     npu / bus-npu / iommu@fde4b000 全部 status="okay"，且带
  *     rknpu-supply / bus-supply / pvtm-supply 三个 regulator。
- *     同 SoC 上这套 Android 内核是官方出货形态，NPU 打开不影响开机，
- *     因此这里与 R5S 对齐打开（RK3568 的 0.8T NPU 在 Android 侧由 rknn 用）。
+ *     **但那只是友善出货板（NanoPi R5S）的形态，不能当作 T68M 也能开 NPU 的证据。**
+ *     T68M 实机（Android 14，2026-11-04）7.6 s 必 panic，栈顶是
+ *     rk_iommu_driver_init → platform_probe → dev_pm_domain_attach → genpd_power_on
+ *     → rockchip_pmu_set_idle_request → panic("panic_on_set_idle set")，val=0x6。
+ *     注意**先 probe 的是 iommu@fde4b000，不是 npu@fde40000**，只关 npu 不够。
+ *     结论：两者都要 status="fail"（"fail\0" 与 "okay\0" 同为 5 字节，可原地覆盖）。
  * ══════════════════════════════════════════════════════════════════ */
-/* NPU（对齐 rk3568-nanopi5 官方 Android 板级） */
+/* NPU：T68M 必须关，且 npu 与其 iommu 都要关（见上方 2026-11-04 实机结论） */
 &rknpu {
 	rknpu-supply = <&vdd_npu>;
-	status = "okay";
+	status = "fail";
 };
 
 &rknpu_mmu {
-	status = "okay";
+	status = "fail";
 };
 
 &bus_npu {
