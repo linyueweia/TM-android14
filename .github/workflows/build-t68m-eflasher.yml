@@ -114,7 +114,26 @@ jobs:
           D=sd-fuse/android14
           DTB="${{ github.event.inputs.dtb }}"
           python3 tools/dtb_features.py "$DTB" --base dist/rk3568-nanopi5-rev01-base.dtb | tee /tmp/feat.txt
-          grep -q 'NPU .*<<< DIFF' /tmp/feat.txt && { echo "dtb NPU still disabled"; exit 1; } || true
+          # NPU must be status=fail. Real-hardware verdict (2026-11-04): with NPU okay this
+          # board panics at 7.6 s in rockchip_pmu_set_idle_request(panic_on_set_idle), and the
+          # node probed first is iommu@fde4b000, not npu@fde40000 -- disabling only npu is not
+          # enough. The old gate asserted the opposite ("NPU still disabled" => fail); it encoded
+          # a conclusion that field testing has since disproved.
+          npu_row=$(grep -E '^NPU[[:space:]]' /tmp/feat.txt || true)
+          echo "gate: $npu_row"
+          case "$npu_row" in
+            *fail*) echo "OK: NPU disabled, as required on T68M" ;;
+            *) echo "FATAL: NPU must be status=fail on T68M (7.6 s panic otherwise)"; exit 1 ;;
+          esac
+          # Patches that are only visible in the dtb bytes, not in the feature matrix.
+          for s in 'rockchip,plane-mask' 'rockchip,primary-plane' 'regulator-always-on' 'no-1-8-v'; do
+            grep -q -- "$s" "$DTB" || { echo "FATAL: dtb missing patch: $s"; exit 1; }
+          done
+          if grep -q -- 'sd-uhs-sdr50' "$DTB"; then
+            echo "FATAL: sd-uhs-sdr50 still present (system disk must stay 3.3V)"; exit 1
+          fi
+          echo "gate: dtb patches OK (npu/iommu fail, vop plane-mask, always-on, no-1-8-v)"
+
           python3 tools/rsce_tool.py boot-replace "$D/boot.orig.img" \
             --pattern 'rk3568-nanopi5-rev*' --dtb "$DTB" --fill-revs 0-15 -o "$D/boot.img"
           python3 tools/rsce_tool.py boot-list "$D/boot.img" | grep -E 'entries=|rk3568' | head -20
