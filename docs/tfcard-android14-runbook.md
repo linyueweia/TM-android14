@@ -15,12 +15,14 @@
 
 | 项 | 值 |
 |---|---|
-| boot.img | `boot_pwr.img` 58,161,152 B |
-| boot header id@0x240 | `fa48d672f805d70e009e3aa63baf0898d34fbe2d`（`rk_boot_id.py check` = MATCH） |
-| 板级 DTB | 172,541 B（槽容量 172,544，余量 3 B） |
+| boot.img | `boot_lite.img` 52,205,568 B（second 精简到 18 项） |
+| boot header id@0x240 | `de878dabc2e28ff51349a0eb3bea31eb263b7dc8`（`rk_boot_id.py check` = MATCH） |
+| sha256 | `987ac9f17b91518efab98f0adea9ca474ee1d23d927e0fb939c9ff5a6540167c` |
+| 板级 DTB | 172,606 B（末槽余量 0 B，见 §3「槽容量会咬人」） |
 | 冷启动到桌面 | 162.7 s（首次，含 dexopt）/ 74.0 s（之后） |
-| 重启到桌面 | 74.0 s |
+| 重启到桌面 | 74.0 s（`boot_lite` 二次重启复测仍 74 s 级） |
 | hwcomposer 崩溃 | 0 次 |
+| NPU | `rknpu 0.9.8` 初始化成功，`renderD129`，`cur_freq=900000000` |
 
 ---
 
@@ -88,15 +90,29 @@ rk_iommu_driver_init → platform_probe → dev_pm_domain_attach → genpd_power
 **原因**：NPU 电源域拿不到 idle ack。**关键在于先 probe 的是 `iommu@fde4b000`，不是 `npu@fde40000`**——
 只关 npu 节点完全没用。
 
-**修法**：两个节点都 `status = "fail"`。
+真正的根因是 **VDD_NPU 这一路电没开**：`genpd_power_on(domain 6)` 去问 NPU 硬件"你 idle 了吗"，
+NPU 没供电就不会回 ack，PMU 直接 panic。所以这不是"NPU 不该开"，是"NPU 开了却没给它电"。
+
+**错解（能开机，但丢掉 NPU）**：两个节点都 `status = "fail"`。核是起来了，NPU 从此不可用。
+友善官方的 R5S DTB 里 NPU 是 `okay` 的，说明这条路本来不该关。
+
+**正解**：把电补上，节点保持 `okay`：
 
 ```dts
-&rknpu     { status = "fail"; };
-&rknpu_mmu { status = "fail"; };
+&vdd_npu {
+	regulator-always-on;
+	regulator-boot-on;
+	regulator-init-microvolt = <900000>;
+};
+&rknpu     { status = "okay"; };
+&rknpu_mmu { status = "okay"; };
 ```
 
-`"fail\0"` 与 `"okay\0"` 同为 5 字节，可以原地覆盖，不需要重排 FDT 结构块。
-写 `"disabled"` 会长 5 字节，必须重建 struct block——不值得。
+`vdd_npu` = PMIC 的 `DCDC_REG4`，`rknpu-supply` 的 phandle 必须指到它。
+
+**实证（2026-11-04，`boot_lite.img`）**：`dmesg` 里 `[drm] Initialized rknpu 0.9.8 ... on minor 1`，
+`/sys/class/devfreq/fde40000.npu/cur_freq = 900000000`，`/dev/dri/renderD129` 存在，
+`dmesg | grep -c 'failed to get ack' = 0`。GPU/VPU/NPU 三项与 R5S 官方 DTB 对齐后无 DIFF。
 
 > `panic_on_set_idle=0` 加 cmdline **无效**，内核没这个参数，只会出现在 `Unknown kernel command line`。
 
@@ -283,11 +299,23 @@ python3 tools/rk_boot_id.py check boot_out.img        # 必须 MATCH
 | 厂商原厂 | 172,191 | 353 B |
 | 补丁版（npu/iommu/vop/cd-gpio/no-1-8-v） | 172,517 | 27 B |
 | 再加 2 个 `regulator-always-on` | 172,541 | **3 B** |
-| 再加 2 个 `regulator-boot-on` | 172,565 | **超容 21 B，拒绝出图** |
+| 再加 2 个 `regulator-boot-on` | 172,565 | **超容 21 B** |
+| 再加 `regulator-init-microvolt`（NPU 正解） | 172,606 | **超容 62 B** |
+| **精简 second 到 18 项之后** | 172,606 | 0 B（末槽刚好放下） |
 
 每个空属性在结构块里固定占 12 字节（属性名若已存在于 strings 块就不额外增长）。
-真要再改，先精简 second 段：47 个条目里 31 个是别的板子（rk3399×10、rk3528×1、
-rk3566×3、rk3576×3、rk3588×12），白占 6.34 MB，T68M 自己只占 2.59 MB。
+DTB 一旦超过 172,541，就必须先精简 second 段：47 个条目里 31 个是别的板子
+（rk3399×10、rk3528×1、rk3566×3、rk3576×3、rk3588×12），白占 6.34 MB，T68M 自己只占 2.59 MB。
+
+`tools/make_lite_boot.py` 干的就是这件事：只留 16 个 T68M 槽 + 2 个 logo，重排所有
+offset 与 RSCE 条目，`second_size` 从 2.34 MB 降到 3,172,414 B，boot.img 58.1 MB → 49.8 MB。
+重排之后末槽容量由“下一个槽的位置”变成 `second_size - pos`，所以最后必须让
+`second_size` 顶到 `末槽偏移 + DTB 长度`，一字节都不能多。
+
+> 不要用 `bootctl set-active-boot-slot b` 切槽：RK 的 u-boot 不认 AOSP 的 BCB 写法，
+> 该命令返回 0 但 `get-active-boot-slot` 仍是 `0`。真正的 A/B 元数据在 `misc` 前 8 KB，
+> 抹零后 u-boot 重建为 `_a, tries=7`——也就是说**能启动的永远是 `_a`**。
+> 所以实机验证只能写 `boot_a`；`boot_b` 留上一个能跑的镜像当回退。
 
 ---
 
@@ -301,11 +329,12 @@ U-Boot SPL board init
 Bootdev(atags): mmc 1                        ← 从 TF 卡启动
 MMC1: Legacy, 52Mhz                          ← 注意：不是 UHS
 SPL: A/B-slot: _a, successful: 1
-DTB: rk3568-nanopi5-rev0f.dtb (172541)
+DTB: rk3568-nanopi5-rev0f.dtb (172606)       ← 括号里的字节数就是“补丁到底生效没”的铁证
 ANDROID: sha1(...) + OK
 mmc1: new high speed SDHC card
 rockchip-drm display-subsystem: bound fe040000.vop
 vop2_crtc_atomic_enable: Update mode to ... (if:HDMI0)
+[RKN] RKNPU fde40000.npu: [drm] Initialized rknpu 0.9.8 ... on minor 1
 ```
 
 系统侧：
@@ -314,6 +343,9 @@ vop2_crtc_atomic_enable: Update mode to ... (if:HDMI0)
 getprop sys.boot_completed        # 1
 ls /dev/dri/card0                 # 存在
 ps -A | grep hwcomposer           # 存活，且不重启
+cat /sys/class/devfreq/fde40000.npu/cur_freq   # 900000000 = NPU 真的在用
+ls /dev/dri/renderD129            # NPU 的 DRM 节点
+dmesg | grep -c 'failed to get ack'            # 0
 ```
 
 时间线（4 GB LPDDR4 + TF 卡）：
@@ -345,7 +377,53 @@ ps -A | grep hwcomposer           # 存活，且不重启
 
 ---
 
-## 6. 回滚
+## 6. 不拔卡换 boot：走 adb 通道
+
+系统已经在跑、USB 调试开着的时候，**不用读卡器、不用拔卡**，直接 adb 把新 boot 写进去。
+这比拔卡快一个数量级（50 MB 推 1.2 s，写两个槽各 10 s），而且不用碰 GPT/misc。
+
+```bash
+export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"     # Git Bash 必须，否则 /data 被改写成 D:/...
+ADB=./platform-tools/adb.exe
+
+$ADB root && $ADB wait-for-device                     # 切 root，adbd 会重启一次
+$ADB push boot_lite.img /data/local/tmp/boot_lite.img
+$ADB shell "sha256sum /data/local/tmp/boot_lite.img"  # 必须与本地 sha256 一致
+```
+
+再按下面的顺序写（**`boot_b` 留回退，只动 `boot_a`**）：
+
+```bash
+# 1) 先把当前能跑的 boot_a 备份到 b 槽，等于“上一版可用镜像”
+$ADB shell "dd if=/dev/block/by-name/boot_a of=/data/local/tmp/bak.img bs=512"
+$ADB shell "dd if=/data/local/tmp/bak.img of=/dev/block/by-name/boot_b bs=512; sync"
+
+# 2) boot_a 写新镜像（bs=512 + 精确 count，别用 bs=1M——会丢尾巴）
+$ADB shell "dd if=/data/local/tmp/boot_lite.img of=/dev/block/by-name/boot_a \
+            bs=512 count=101964; sync"                 # 101964 = 52205568 / 512
+
+# 3) 回读校验，必须等于本地 sha256
+$ADB shell "dd if=/dev/block/by-name/boot_a bs=512 count=101964 | sha256sum"
+
+$ADB reboot
+```
+
+要点：
+
+- **能启动的永远是 `_a`**（见 §3 末尾）。写 `boot_b` 只是备份，切不过去。
+- `boot_a` 分区 64 MiB，`boot_lite.img` 49.8 MiB，放得下；不用改分区表。
+- vbmeta 不校验 boot 的 hash（厂商包是 permissive），所以改 boot 不会因 AVB 拒启。
+- 板子如果起不来就失去 adb，这时只能回 U-Boot 串口（1500000 8N1）：
+
+```
+mmc dev 1
+mmc read 0x10000000 0x30000 0x20000     # 从 boot_b 读 64 MiB 到内存
+mmc write 0x10000000 0x10000 0x20000    # 写回 boot_a
+```
+
+---
+
+## 7. 回滚
 
 任何一步都能只坏 TF 卡，不动 eMMC/板子：
 
@@ -361,7 +439,7 @@ dd if=/dev/zero of=/dev/sdX bs=512 seek=$((0x40000)) count=16 conv=notrunc
 
 ---
 
-## 7. 参考
+## 8. 参考
 
 - `docs/boot-verify-checklist.md` —— 写卡前后的校验清单
 - `rk3568-lyt-t68m.dts` —— 目标板 dts（上面 9 个断点的修法全在里面）
