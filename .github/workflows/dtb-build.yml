@@ -171,14 +171,16 @@ jobs:
                   bad.append('%s: card name=%r, want rockchip,hdmi0' % (tag, name))
               else:
                   print('%s: card name = %s OK' % (tag, name.decode()))
-          # 三条构建流水线注入的就是 dist 那份，它必须与源码编译产物在这一节点上完全一致，
-          # 否则「固件用的是最新 dtb」这个前提不成立。
+          # 三条构建流水线注入的就是 dist 那份，它必须与源码编译产物在这一节点上
+          # 语义一致。phandle 是编译时自动分配的编号，dtb_diff 自己也把它归一化掉了
+          # （run 41858170120 就是因为没排除它而误报），这里同样忽略。
+          IGN = {'phandle', 'linux,phandle'}
           bh, rh = built.get('/hdmi-sound') or {}, ref.get('/hdmi-sound') or {}
-          dd = {k for k in set(bh) | set(rh) if bh.get(k) != rh.get(k)}
+          dd = {k for k in set(bh) | set(rh) if k not in IGN and bh.get(k) != rh.get(k)}
           if dd:
               bad.append('/hdmi-sound differs from dist: %s' % sorted(dd))
           else:
-              print('/hdmi-sound identical to dist OK')
+              print('/hdmi-sound semantically identical to dist OK')
           if bad:
               print('FATAL: HDMI 音频修复缺失或与 dist 漂移 —— 构建出的固件会没声音')
               for b in bad: print('  -', b)
