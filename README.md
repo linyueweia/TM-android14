@@ -25,14 +25,23 @@ GitHub Actions（ubuntu-latest，全部 `workflow_dispatch` 手动触发）：
 
 | 产物 | 内容 | 大小 | 用之前 |
 |---|---|---|---|
-| `t68m-android14-usb` | `update.img.zst` + `partitions.zip` | 约 **1/3** 原始体积 | 先 `zstd -d update.img.zst`，Windows 用 7-Zip ≥ 24 |
+| `t68m-android14-usb` | `update.img.zst`（默认只出这个） | **815 MB**（原始 2.21 GB，压到 36.0%） | 先 `zstd -d update.img.zst`，Windows 用 7-Zip ≥ 24 |
+| ↑ 同上，`with_partitions=true` | 另加 `partitions.zip` | +1.03 GB | 分区烧写兜底时才要，平时别勾 |
 | `t68m-android14-sd` | `*.img.gz` + `SHA256SUMS` | 已 gzip | 先 `gunzip` 再 `dd` / balenaEtcher |
 | `t68m-android14-eflasher` | `*.img.gz` + `SHA256SUMS` | 已 gzip | 同上 |
 | `t68m-dtb` | 编译出的板级 DTB | 约 40 KB | 直接比对/注入 |
 
+实测对比（同一份产物，2026-11-04）：
+
+```
+修复前  4301.5 MB   update.img 原样上传 + partitions.zip 里又打了一份 update.img
+修复后  1849.6 MB   只压 update.img(2262.9 MB -> 814.6 MB, 36.0%) + 分区包
+再收一步  815 MB    分区包改为 with_partitions 才产出（默认不出，内容与 update.img 重复）
+```
+
 > **线刷包压缩**：`update.img` 是 RKAF 裸容器，分区按扇区原样拼接、含大量零填充。
 > 流水线用 `zstd -19` 压一遍再上传（artifact 本身 `compression-level: 0`，因为已是压缩包）；
-> 以前的 4.3 GB 里有一半是同一个 `update.img` 被重复打进了 partitions.zip，现已排除。
+> 以前的 4.3 GB 里有一半是同一个 `update.img` 被重复打进了 partitions.zip，已排除。
 > dispatch 时填 `release_tag`（如 `v1.0.0`）可同时发布到 Release，避免 7 天 artifact 过期后重下。
 
 ## 状态

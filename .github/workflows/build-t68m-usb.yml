@@ -1,9 +1,11 @@
 name: build-t68m-usb
 
 # USB 线刷包（Maskrom + RKDevTool / rkdeveloptool）
-#   1. update.img        —— Rockchip RKAF 容器（afptool + rkImageMaker 打包），RKDevTool 一键刷
-#   2. partitions zip    —— parameter.txt + MiniLoaderAll.bin + 各分区 img，用「分区烧写」兜底
-# 两条都出：afptool/rkImageMaker 来自 rkbin，版本不对时打包可能失败，分区包一定能用。
+#   1. update.img.zst   —— Rockchip RKAF 容器（afptool + rkImageMaker 打包）再 zstd 压，
+#                          RKDevTool 一键刷；下载后要先 `zstd -d` 还原成 update.img
+#   2. partitions.zip   —— parameter.txt + MiniLoaderAll.bin + 各分区 img，用「分区烧写」兜底
+# 默认只出第 1 个（约 815 MB）。第 2 个和 update.img 内容重复、约 1 GB，
+# 只有 dispatch 时把 with_partitions 设成 true 才产出（打包失败时兜底用）。
 on:
   workflow_dispatch:
     inputs:
@@ -19,6 +21,10 @@ on:
         description: 可选：填了就同时发布到 Release（如 v1.0.0），留空只出 artifact
         required: false
         default: ""
+      with_partitions:
+        description: 额外产出分区包 partitions.zip（约 1 GB，与 update.img 内容重复，仅打包失败兜底时需要）
+        required: false
+        default: "false"
 
 permissions:
   contents: write
@@ -209,8 +215,8 @@ jobs:
           echo "RAW_BYTES=$RAW" >> "$GITHUB_ENV"
           echo "ZST_RATIO=$RATIO" >> "$GITHUB_ENV"
 
-      - name: Pack partitions zip
-        if: always()
+      - name: Pack partitions zip (optional)
+        if: always() && github.event.inputs.with_partitions == 'true'
         run: |
           set -euxo pipefail
           cd usb
@@ -235,6 +241,12 @@ jobs:
             echo '--- dtb feature matrix ---'
             cat /tmp/feat.txt 2>/dev/null || true
             echo '```'
+            echo
+            if [ -f t68m-android14-usb-partitions.zip ]; then
+              echo "分区包：已产出（with_partitions=true）"
+            else
+              echo "分区包：未产出（with_partitions 未开启，默认只出压缩后的 update.img）"
+            fi
             echo
             echo "**下载后**：\`zstd -d update.img.zst\`（Windows 用 7-Zip >= 24 右键解压）"
           } >> "$GITHUB_STEP_SUMMARY"
