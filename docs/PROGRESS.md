@@ -58,6 +58,23 @@
 
 ---
 
+## Day 3 · 2026-11-04 —— HDMI 音频闭环（有画面没声音）
+
+| # | 完成项 | 判据 / 证据 | 状态 |
+|---|---|---|---|
+| 1 | 定性「有画面没声音」不是硬件/EDID 问题 | 同一台显示器在 R5S 厂商固件上画面+声音都正常；本板 `/proc/asound/cards` 只有 card 0，无板载 codec | ✅ |
+| 2 | 根因一：`hdmi_sound` 的 `mclk-fs` 默认 256，dw-hdmi 按 **128×fs** 采样 | 设备树实读 `simple-audio-card,mclk-fs` = `00 00 00 80`（=128）；在此之前 DMA/DAPM 全正常、`dmesg` 零报错，静默无声 | ✅ |
+| 3 | 根因二：声卡名不匹配 RK audio HAL 的硬编码 `rockchiphdmi0` | 设备树 `simple-audio-card,name` = `rockchip,hdmi0`；`/proc/asound/card0/id` = `rockchiphdmi0`；改前是 `invalid card num` | ✅ |
+| 4 | 根因三：`audio_policy` 拿 `Speaker` 当默认输出、`attachedDevices` 无 `HDMI Out` | `defaultOutputDevice` = `HDMI Out`；`dumpsys audio` 里 stream 的 `Device` 12 条全是 `hdmi(400)` | ✅ |
+| 5 | **实机出声**（用户听感确认） | 三项结构判据 + 人耳 | ✅ |
+| 6 | audio_policy 纳入版本控制，解决「刷机即丢」 | 新增 `board-overlay/vendor/etc/`（两份 xml）+ `tools/apply-audio-policy.sh`；脚本自检三项全过（声卡名 1 / defaultOutputDevice=HDMI Out / route 12 条），幂等可重跑 | ✅ |
+| 7 | 记录一条判死禁忌：**别用 `tinyplay` 判断系统有没有声音** | `tinyplay` 直接打 PCM 到声卡、绕开 AudioFlinger，与系统媒体流是两条路 | ❌→✅ |
+
+**本轮方法论**：音频问题按 **内核时钟 → 声卡名 → 框架路由** 三层走，每层有独立判据，别跳层。
+三个根因是**叠加**的，只修其中一两个都会「看起来改了但没声」，这是它拖了这么久的原因。
+
+---
+
 ## 未闭环（不粉饰，接手先看这里）
 
 | # | 项 | 现状 | 怎么闭合 |
@@ -66,6 +83,7 @@
 | 2 | 第三台板为什么拒绝合法的 `RKNS` | 头里 `0x90`/`0xe8` 是**明文** SHA256，而载荷 RC4 加密 → 离线不可复算 | 拔掉 TF 卡冷启动该机：能起 eMMC → BROM 顺序问题；起不来 → BROM 拒它 |
 | 3 | USB `update.img` 只离线验证过打包 | RKDevTool/Maskrom 实刷未做 | 有空上板刷一次，确认能进系统 |
 | 4 | A/B `successful:1, tries-remain:0` | 当前安全（successful 优先），但 `boot_b` 是旧镜像 | 下次换 boot 时同步刷 `boot_b` |
+| 5 | **audio_policy 只在 vendor overlay 里** | 有一键重放脚本，但没落到 vendor 镜像 | 重打包 super/vendor 风险大、收益小；现方案 = 刷机后跑一次 `tools/apply-audio-policy.sh` |
 
 ---
 

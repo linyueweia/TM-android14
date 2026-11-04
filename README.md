@@ -52,6 +52,7 @@ GitHub Actions（ubuntu-latest，全部 `workflow_dispatch` 手动触发）：
 - [x] 镜像产出：SD / eflasher / USB(update.img) 三条流水线
 - [x] boot header SHA1 修正器 `tools/rk_boot_id.py`（**11-03 的产物缺这一步，全部不可启动**，见 `docs/t68m-android14-plan.md` §7）
 - [x] **实机跑通（TF 卡，2026-11-04）**：HDMI 出画面、进桌面、点「重启」能真正重启
+- [x] **HDMI 音频出声（2026-11-04）**：`mclk-fs 256→128` + 声卡名 `rockchip,hdmi0` + audio_policy 改 HDMI-only
 
 ## 实机结果
 
@@ -60,8 +61,9 @@ GitHub Actions（ubuntu-latest，全部 `workflow_dispatch` 手动触发）：
 | 冷启动到桌面 | 162.7 s（首启含 dexopt）/ 74.0 s（之后） |
 | 重启到桌面 | 74.0 s |
 | hwcomposer 崩溃 | 0 次 |
-| 板级 DTB | 172,541 B（`dist/rk3568-lyt-t68m-android.dtb`） |
+| 板级 DTB | 172,625 B（`dist/rk3568-lyt-t68m-android.dtb`，`sha256 a2eac6fc…`） |
 | boot.img | 58,161,152 B，`id@0x240 = fa48d672…`，`rk_boot_id.py check` = MATCH |
+| HDMI 音频 | 声卡 `0 [rockchiphdmi0]`、`mclk-fs=0x80`、`dumpsys audio` route 全 `hdmi(400)` |
 
 串口实证的关键几行：
 
@@ -83,9 +85,20 @@ SD 控制器 pinctrl 层级、super sparse→raw、A/B tries 扣光、vop plane 
 
 ## 现状一句话
 
-从厂商包到「HDMI 出桌面 + 重启可用」已全链路跑通，**改的只是一个 DTB**（外加重算 boot header 摘要）。
+从厂商包到「HDMI 出画面 + 出声音 + 重启可用」已全链路跑通，**改的只是一个 DTB + 两份 audio_policy**。
 剩下的都是优化项，不是功能缺陷：second 段瘦身（31 个别的板子的 DTB 白占 6.34 MB）、
-A/B `tries-remain` 恢复成 7。
+A/B `tries-remain` 恢复成 7、把 audio_policy 的 overlay 改动落回 vendor 镜像。
+
+## 刷机 / 恢复出厂后必做
+
+DTS 的音频修复随 boot.img 持久，但 `/vendor/etc/` 里那两份 audio_policy 是 overlay 改动，
+**刷 vendor 或恢复出厂就丢，表现是「又没声音了」**（画面正常，很容易误判成硬件坏了）。
+
+```
+tools/apply-audio-policy.sh      # 推文件 + 重启 audioserver + 三项自检，幂等
+```
+
+源文件在 `board-overlay/vendor/etc/`，不依赖这台机器。
 
 ## 文档索引
 
@@ -97,6 +110,7 @@ A/B `tries-remain` 恢复成 7。
 | [`docs/boot-verify-checklist.md`](docs/boot-verify-checklist.md) | 上电验收清单，把「能不能启动」变成可对照的判据 |
 | [`docs/usb-flash-readme.txt`](docs/usb-flash-readme.txt) | USB 线刷三步走（随刷机包一起分发） |
 | [`tools/README.md`](tools/README.md) | 工具集速查：按症状找脚本 |
+| [`board-overlay/`](board-overlay/) | 刷机后要补的运行时改动（目前只有 audio_policy 两份） |
 
 ## 一条硬纪律
 
