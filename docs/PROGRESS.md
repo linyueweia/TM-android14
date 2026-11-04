@@ -67,8 +67,9 @@
 | 3 | 根因二：声卡名不匹配 RK audio HAL 的硬编码 `rockchiphdmi0` | 设备树 `simple-audio-card,name` = `rockchip,hdmi0`；`/proc/asound/card0/id` = `rockchiphdmi0`；改前是 `invalid card num` | ✅ |
 | 4 | 根因三：`audio_policy` 拿 `Speaker` 当默认输出、`attachedDevices` 无 `HDMI Out` | `defaultOutputDevice` = `HDMI Out`；`dumpsys audio` 里 stream 的 `Device` 12 条全是 `hdmi(400)` | ✅ |
 | 5 | **实机出声**（用户听感确认） | 三项结构判据 + 人耳 | ✅ |
-| 6 | audio_policy 纳入版本控制，解决「刷机即丢」 | 新增 `board-overlay/vendor/etc/`（两份 xml）+ `tools/apply-audio-policy.sh`；脚本自检三项全过（声卡名 1 / defaultOutputDevice=HDMI Out / route 12 条），幂等可重跑 | ✅ |
-| 7 | 记录一条判死禁忌：**别用 `tinyplay` 判断系统有没有声音** | `tinyplay` 直接打 PCM 到声卡、绕开 AudioFlinger，与系统媒体流是两条路 | ❌→✅ |
+| 6 | audio_policy 纳入版本控制，解决「刷机即丢」 | 新增 `board-overlay/vendor/etc/`（两份 xml）+ `board-overlay/README.md` 写清推送步骤与三条自检判据 | ✅ |
+| 7 | 重启后音频配置仍在（overlay 是否持久化） | 重启到 `sys.boot_completed=1` 后，两份 xml 的 md5 仍是 `a1fed148…` / `31b7c053…`，与仓库逐字节相同；声卡仍 `rockchiphdmi0`、`defaultOutputDevice` 仍 `HDMI Out` | ✅ |
+| 8 | 记录一条判死禁忌：**别用 `tinyplay` 判断系统有没有声音** | `tinyplay` 直接打 PCM 到声卡、绕开 AudioFlinger，与系统媒体流是两条路 | ❌→✅ |
 
 **本轮方法论**：音频问题按 **内核时钟 → 声卡名 → 框架路由** 三层走，每层有独立判据，别跳层。
 三个根因是**叠加**的，只修其中一两个都会「看起来改了但没声」，这是它拖了这么久的原因。
@@ -83,7 +84,7 @@
 | 2 | 第三台板为什么拒绝合法的 `RKNS` | 头里 `0x90`/`0xe8` 是**明文** SHA256，而载荷 RC4 加密 → 离线不可复算 | 拔掉 TF 卡冷启动该机：能起 eMMC → BROM 顺序问题；起不来 → BROM 拒它 |
 | 3 | USB `update.img` 只离线验证过打包 | RKDevTool/Maskrom 实刷未做 | 有空上板刷一次，确认能进系统 |
 | 4 | A/B `successful:1, tries-remain:0` | 当前安全（successful 优先），但 `boot_b` 是旧镜像 | 下次换 boot 时同步刷 `boot_b` |
-| 5 | **audio_policy 只在 vendor overlay 里** | 有一键重放脚本，但没落到 vendor 镜像 | 重打包 super/vendor 风险大、收益小；现方案 = 刷机后跑一次 `tools/apply-audio-policy.sh` |
+| 5 | **audio_policy 只在 vendor overlay 里** | 重启已实测保留；但刷 vendor / 恢复出厂会丢 | 重打包 super/vendor 风险大、收益小；现方案 = 丢了照 `board-overlay/README.md` 推三条命令 |
 
 ---
 

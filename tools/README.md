@@ -12,8 +12,7 @@
 | 想证明「和厂商 DTB 除了板级差异啥都一样」 | `dtb_diff.py`（语义级，跳过 phandle 本身） |
 | 换了板子，`hwrev` 探测不到自己的 dtb | `make_lite_boot.py --fill-revs 0-15`（16 个槽全铺） |
 | 不拔卡想换 boot.img | `adb_flash_boot.py`（push + sha256 + 精确 dd + 回读校验） |
-| HDMI 有画面没声音 | 先 `cat /sys/kernel/debug/clk/clk_summary \| grep hdmi`，再 `apply-audio-policy.sh` 重放策略 |
-| 刷完机 / 恢复出厂后 HDMI 又没声音了 | `apply-audio-policy.sh`（vendor overlay 会丢，一条命令补回来） |
+| HDMI 有画面没声音 | 先看 [`board-overlay/README.md`](../board-overlay/README.md)，按那三条判据走 |
 | 串口要登进 Linux/Android shell 跑命令 | `serial_shell.py`（在技能库里，同款） |
 
 ## 固件解剖 / 打包
@@ -46,20 +45,6 @@
 | 脚本 | 用途 |
 |---|---|
 | `adb_flash_boot.py` | adb 直写 A/B boot 槽：`--img`、`--slot`、`--no-reboot`、`--verify-only` |
-| `apply-audio-policy.sh` | 把 `board-overlay/vendor/etc/` 里的 HDMI-only 音频策略推到设备（overlay 改动，刷机会丢），带三项自检，幂等 |
-
-## board-overlay/
-
-不是脚本，是**必须能在机器外重建的运行时改动**：
-
-```
-board-overlay/vendor/etc/audio_policy_configuration.xml
-board-overlay/vendor/etc/audio_policy_configuration_singlehal.xml
-```
-
-本板只有 HDMI 一个音频输出，这两份把 `attachedDevices` 换成 `HDMI Out`、`defaultOutputDevice`
-改成 `HDMI Out`，否则 AudioFlinger 永不往 HDMI 路由。它们在 `adb remount` 的 overlay 里，
-**重启保留、刷 vendor/恢复出厂就丢** —— 丢了跑 `apply-audio-policy.sh` 即可，不用重新推理。
 
 ## 自测 / 复现
 

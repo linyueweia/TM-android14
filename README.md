@@ -94,11 +94,8 @@ A/B `tries-remain` 恢复成 7、把 audio_policy 的 overlay 改动落回 vendo
 DTS 的音频修复随 boot.img 持久，但 `/vendor/etc/` 里那两份 audio_policy 是 overlay 改动，
 **刷 vendor 或恢复出厂就丢，表现是「又没声音了」**（画面正常，很容易误判成硬件坏了）。
 
-```
-tools/apply-audio-policy.sh      # 推文件 + 重启 audioserver + 三项自检，幂等
-```
-
-源文件在 `board-overlay/vendor/etc/`，不依赖这台机器。
+源文件在 [`board-overlay/vendor/etc/`](board-overlay/vendor/etc/)，推三条 adb 命令即可，
+具体步骤和三条自检判据见 [`board-overlay/README.md`](board-overlay/README.md)。
 
 ## 文档索引
 
@@ -110,7 +107,7 @@ tools/apply-audio-policy.sh      # 推文件 + 重启 audioserver + 三项自检
 | [`docs/boot-verify-checklist.md`](docs/boot-verify-checklist.md) | 上电验收清单，把「能不能启动」变成可对照的判据 |
 | [`docs/usb-flash-readme.txt`](docs/usb-flash-readme.txt) | USB 线刷三步走（随刷机包一起分发） |
 | [`tools/README.md`](tools/README.md) | 工具集速查：按症状找脚本 |
-| [`board-overlay/`](board-overlay/) | 刷机后要补的运行时改动（目前只有 audio_policy 两份） |
+| [`board-overlay/README.md`](board-overlay/README.md) | 刷机/恢复出厂后要补的运行时改动（目前只有 audio_policy 两份） |
 
 ## 一条硬纪律
 
