@@ -41,6 +41,21 @@
 于是回头用 eMMC 的 `/boot.scr` 起 iStoreOS。**所以「插卡不进卡」不是没扫到卡，是两件事叠一起：
 BootROM 先选中 eMMC 的 idbloader；即使进了 u-boot，它也不认 Android 的分区布局。**
 
+**优先级实测（2026-11-04 20:43，双介质均合法）**：重启前用 SSH 从 iStoreOS 读 TF 卡
+LBA64（`md5 c279ff71…`，`RKNS` 完好）确认真在位、eMMC LBA64 也合法（`ce6eeadc…`），
+冷启动结果仍是 eMMC：`Trying to boot from MMC1`（SPL 为 1-based，MMC1=eMMC）。
+→ **BROM 层 eMMC 优先于 SD，不是"TF 优先"**。
+
+两点必须分清：
+
+| 层级 | 谁决定 | 实测行为 |
+|---|---|---|
+| BROM（第一级） | 固定介质顺序 SPI → eMMC → SD | eMMC 有合法 `RKNS` idbloader 就直接跑它的 SPL，**TF 完全不被考虑** |
+| u-boot（第二级） | `boot_targets` 顺序 | 确实 SD 槽先扫（`mmc@fe2b0000` 在 `mmc@fe310000` 之前），但 Android 分区里没有可引导项 → 0 bootflow |
+
+「插卡就进卡」的普遍印象来自多数友善板 eMMC 为空/未贴，BROM 在 eMMC 上找不到 idbloader
+才落到 SD（R5S 即此情形）——那是**没有竞争**，不是 SD 优先级更高。
+
 **修法**：把 eMMC 的 LBA64 清零（只抹 1 个扇区，不动分区表）：
 
 ```bash
