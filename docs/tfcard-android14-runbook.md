@@ -426,6 +426,29 @@ state ON 1366x768p60 / eth0..eth3 / sys.boot_completed=1
 `rk-crypto ... invalid resource` 是 dtsi 里 crypto 声明了两段 reg、板级 dts 只映射一段导致的
 警告，驱动随后注册成功，`/dev/crypto` 存在——与 R5S 表现一致，不是缺陷。
 
+### CI 验证链（以及它证明了什么、没证明什么）
+
+| workflow | 它真正验证的东西 |
+|---|---|
+| `dtb-build` | dts 在内核树上**真编译**通过；NPU/GPU/VPU/RGA/OP-TEE/CMA 与 R5S 同开；`crypto/dfi/suspend` 三项 status 正确；源码产物与 `dist/` **IP 语义 0 差异** |
+| `build-t68m-sd` | 分区包解包 → 注入 dtb（entries=18、含 rev0f、headroom≥0）→ `console=ttyS2` → boot header SHA1 `MATCH` → 组装成 7.8 GiB 镜像并 gzip |
+| `build-t68m-eflasher` | 同上，另加 eflasher 模板（自启动刷写） |
+| `build-t68m-usb` | 同上，另加 update.img 打包与分区包 |
+
+**它没证明的是：这三个 tgz/img 从来没有上过板。** 实机验证的是同一套分区镜像手工组装到
+TF 卡上的产物（同一 dtb、同一条 `make_lite_boot` 路径、同样的 cmdline 与 header 修复）。
+所以"CI 成功"只等于"构建链和它的全部断言都过了"，不永远等于"这个包一定能启动"——
+要真验证，得把 artifact 写到卡上再跑一遍。
+
+2026-11-04 就抓到两次"绿得假"：
+1. `make ... | tee | tail` 没有 `pipefail`，dts 的语法错误被 `tail` 的退出码吃掉，
+   步骤显示 success，artifact 里还是缓存里的旧 dtb（172,259 B）。
+2. `make_lite_boot` 一度只做"过滤"没做"补齐"，SD 包的 boot.img 只有 rev01..rev07，
+   缺 rev0f —— 本板 hwrev=0x0f，上板会找不到 dtb。是 `entries=18` 那条断言先把它拦下的。
+
+现在这三类都有硬断言兜底：`set -euo pipefail` + `dtb size > 170000` + `grep rev0f.dtb`
++ `dist parity OK (0 IP diff)`。
+
 ---
 
 ## 5. 已知遗留（都不影响使用）
