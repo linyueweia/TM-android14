@@ -56,6 +56,35 @@ LBA64（`md5 c279ff71…`，`RKNS` 完好）确认真在位、eMMC LBA64 也合�
 「插卡就进卡」的普遍印象来自多数友善板 eMMC 为空/未贴，BROM 在 eMMC 上找不到 idbloader
 才落到 SD（R5S 即此情形）——那是**没有竞争**，不是 SD 优先级更高。
 
+**反例（2026-11-04 21:0x，第三台同型号板）——"`RKNS` 在"不等于"能启动"**：
+这台 eMMC 的 LBA64 **有** `RKNS` 头，与能启动那台**逐字节同结构**（只有 `0x90`、`0xe8`
+两处 32 字节哈希不同），但 BROM 照样走 SD：
+
+```
+U-Boot SPL 2017.09_armbian-... (Oct 22 2026)
+Trying to boot from MMC2          ← 1-based，MMC2 = SD
+Kernel command line: storagemedia=sd androidboot.boot_devices=fe2b0000.dwmmc
+```
+
+两台 RKNS 头差异只在哈希，载荷分布不同：
+
+| | 头 | 载荷非零范围 | 校验值 |
+|---|---|---|---|
+| 能启动那台 | `RKNS` + `0x00020180` + 条目表 | LBA 67..424 + 428..2047（**连续越出 1 MB**） | `0x90`/`0xe8` 两处 SHA256 |
+| 走 SD 那台 | 同上，逐字节相同 | LBA 67..684 后**全零**（618 扇区） | 同上，但值不同 |
+
+RKNS 的载荷是 RC4 加密的、`0x90`/`0xe8` 的 SHA256 是对**明文**算的，
+离线复算不出来（用厂商 `idbloader.img` 作标尺，试遍起点×长度也匹配不上）。
+所以**"BROM 为什么拒它"这一步没能定死**，只能确定它拒了。
+
+结论按四台实测修正为：
+
+- TF 能不能启动，**唯一变量是 BROM 是否接受 eMMC 的 idbloader**，跟"优先级设置"无关；
+- `RKNS` 魔数只是**必要条件**：有魔数但载荷对不上，BROM 一样跳过（第三台即此）；
+- MMC 编号是 **1-based**：SPL 打 `Trying to boot from MMC1` = eMMC，`MMC2` = SD。
+  这是判断"这轮到底谁赢"最快的判据，比看 cmdline 的 `storagemedia=` 更直接。
+
+
 **修法**：把 eMMC 的 LBA64 清零（只抹 1 个扇区，不动分区表）：
 
 ```bash
