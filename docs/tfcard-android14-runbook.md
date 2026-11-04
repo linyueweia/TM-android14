@@ -35,6 +35,12 @@
 **原因**：RK3568 BootROM 按 SPI → eMMC → SD 的顺序找 idbloader。eMMC 的 LBA64 处有厂商
 `RKNS`（vendor storage + miniloader），BootROM 认它，就不会再往下找 SD。
 
+**补充实测（eMMC 恢复后）**：BootROM 进 eMMC 的 SPL（`U-Boot SPL 2025.10-OpenWrt`），
+那一级 u-boot 确实会 `Scanning for bootflows in all bootdevs` 把 TF 槽（`mmc@fe2b0000`）也扫一遍，
+但 Android 的卡里没有 `boot.scr` / extlinux / EFI 启动项，扫完 0 个 bootflow，
+于是回头用 eMMC 的 `/boot.scr` 起 iStoreOS。**所以「插卡不进卡」不是没扫到卡，是两件事叠一起：
+BootROM 先选中 eMMC 的 idbloader；即使进了 u-boot，它也不认 Android 的分区布局。**
+
 **修法**：把 eMMC 的 LBA64 清零（只抹 1 个扇区，不动分区表）：
 
 ```bash
@@ -44,6 +50,27 @@ sync
 ```
 
 > 这一步之后 eMMC 里的系统就起不来了。T68M 上 eMMC 原本是 iNextOS，确认可以牺牲再动。
+
+**反悔了怎么恢复**（实测可逆）：被清零的只有 LBA64 前 4 字节 `52 4b 4e 53`（`RKNS`），
+LBA65 之后的 idbloader 载荷没动。写回即可，iStoreOS 立刻恢复启动：
+
+```bash
+# 只写 4 字节也行；写整扇区更稳（取自 board/emmc_lba64.bin）
+dd if=emmc_lba64.bin of=/dev/block/mmcblk0 bs=512 seek=64 count=1 conv=notrunc && sync
+```
+
+**但在 Android 里看不到 eMMC**：从 TF 卡启动时，厂商 `dtbo`（`dtbo_a` 第 2 个 overlay）
+把 `sdhci@fe310000` 置成 `disabled`，`/proc/partitions` 里连 `mmcblk0` 都没有。
+不是我们 DTB 的问题（仓库 dts 里 `&sdhci` 一直是 `okay`）。要写回就得先把 overlay 打开：
+
+```bash
+# board/dtbo_a_emmc_on.img 就是把 overlay 里 disabled 改成 okay 的版本
+dd if=dtbo_on.img of=/dev/block/by-name/dtbo_a bs=512 count=8192 && sync && reboot
+# 写完 eMMC 记得把原厂 dtbo 还原，避免 by-name 双设备歧义
+```
+
+> 恢复后 BootROM 按 SPI→eMMC→SD 顺序，会直接进 iStoreOS；想在插卡时进安卓 TF 卡，
+> 得在 u-boot 里再把 LBA64 那 4 字节清零（`mmc dev 0; mw.b ...` 或临时拔卡不现实）。
 
 ---
 
