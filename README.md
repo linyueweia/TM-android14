@@ -10,10 +10,30 @@ LYT T68M（RK3568）适配 Android 14，基线 = 友善电子 rk35xx-android14 S
 
 ## 云编译路线
 
-GitHub Actions（ubuntu-latest）分两步走：
+GitHub Actions（ubuntu-latest，全部 `workflow_dispatch` 手动触发）：
 
-1. **probe**（`.github/workflows/probe.yml`）：实测 runner 磁盘余量、gitea 源可达性与浅克隆体积 —— 判据先行，确认全量构建可行性。
-2. **build**（后续）：按 probe 结果落构建工作流（内核/DTB 编译 → 全量镜像或分段构建）。
+| 工作流 | 干什么 | 产物 |
+|---|---|---|
+| `firmware-probe.yml` | 判据先行：runner 磁盘余量、友善 CDN 可达性、包体积 | 探测报告 |
+| `fetch-images.yml` | 拉取并缓存友善 Android 14 分区包 | 分区包 |
+| `dtb-build.yml` | 由 DTS 源码编译 DTB，并与 `dist/` 做 **0 IP 差异** 回归 | `t68m-dtb` |
+| `build-t68m-sd.yml` | TF 卡启动镜像（sd-fuse） | `t68m-android14-sd` |
+| `build-t68m-eflasher.yml` | eMMC 烧写镜像（sd-fuse eflasher） | `t68m-android14-eflasher` |
+| `build-t68m-usb.yml` | Maskrom/RKDevTool 线刷包（RKAF 容器） | `t68m-android14-usb` |
+
+### 产物怎么下、多大
+
+| 产物 | 内容 | 大小 | 用之前 |
+|---|---|---|---|
+| `t68m-android14-usb` | `update.img.zst` + `partitions.zip` | 约 **1/3** 原始体积 | 先 `zstd -d update.img.zst`，Windows 用 7-Zip ≥ 24 |
+| `t68m-android14-sd` | `*.img.gz` + `SHA256SUMS` | 已 gzip | 先 `gunzip` 再 `dd` / balenaEtcher |
+| `t68m-android14-eflasher` | `*.img.gz` + `SHA256SUMS` | 已 gzip | 同上 |
+| `t68m-dtb` | 编译出的板级 DTB | 约 40 KB | 直接比对/注入 |
+
+> **线刷包压缩**：`update.img` 是 RKAF 裸容器，分区按扇区原样拼接、含大量零填充。
+> 流水线用 `zstd -19` 压一遍再上传（artifact 本身 `compression-level: 0`，因为已是压缩包）；
+> 以前的 4.3 GB 里有一半是同一个 `update.img` 被重复打进了 partitions.zip，现已排除。
+> dispatch 时填 `release_tag`（如 `v1.0.0`）可同时发布到 Release，避免 7 天 artifact 过期后重下。
 
 ## 状态
 
@@ -22,7 +42,7 @@ GitHub Actions（ubuntu-latest）分两步走：
 - [x] T68M DTS 移植进 Android SDK 内核树 → `dist/rk3568-lyt-t68m-android.dtb`
 - [x] 镜像产出：SD / eflasher / USB(update.img) 三条流水线
 - [x] boot header SHA1 修正器 `tools/rk_boot_id.py`（**11-03 的产物缺这一步，全部不可启动**，见 `docs/t68m-android14-plan.md` §7）
-- [x] **实机跑通（TF 卡，2026-11-05）**：HDMI 出画面、进桌面、点「重启」能真正重启
+- [x] **实机跑通（TF 卡，2026-11-04）**：HDMI 出画面、进桌面、点「重启」能真正重启
 
 ## 实机结果
 
