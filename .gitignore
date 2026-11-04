@@ -1,2 +1,6 @@
 firmware/
 r5s_dl.html
+
+# local CI log dumps
+*_log.txt
+*_log.bin
