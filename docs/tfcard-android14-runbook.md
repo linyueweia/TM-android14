@@ -365,6 +365,69 @@ dmesg | grep -c 'failed to get ack'            # 0
 
 ---
 
+## 4b. 与 R5S 厂商 DTB 的 IP 对齐（逐节点核查）
+
+判据不是"能开机"，而是**同一个 SoC IP 在这块板上的开关必须和厂商出货板一致**。
+不一致的后果都是静默的：NPU 关了要等 rknn 初始化才发现，VPU 关了要等硬解失败才发现。
+
+### 为什么不按字节 diff
+
+DTB 的字节布局由编译器决定：节点顺序、`phandle` 编号、strings 块去重顺序，任何一处
+不同就会让整个文件错位。两块板节点数本来就差 33 个（995 vs 1028），`phandle` 编号必然
+整体偏移，字节级 diff 会产出上千行假差异，真问题被淹掉。
+
+所以用 `tools/dtb_diff.py` 做**语义级对齐**：`phandle` 属性本身不比；引用类属性
+（`*-supply`/`iommus`/`clocks`/`power-domains`/`remote-endpoint`…）先把 phandle 解析成
+**目标节点路径**再比——编号变了但指向同一个节点 = 一致。注意 `clocks`/`resets`/`*-gpios`
+是 `<&provider specifier>` 交替排列，只解析偶数下标，否则一个恰好等于某 phandle 的
+clock id 会被当成节点引用，造出一堆假差异（第一版就踩了这个坑）。
+
+### 结果
+
+```
+共同节点 958：语义完全一致 500，有差异 458
+```
+
+458 个差异里，458 个都能归到板级（引脚 `rockchip,pins`、regulator、LED、PHY 地址、
+内存大小、面板时序）。**SoC IP 相关的只有 15 个**：
+
+| 差异 | board | base(R5S) | 判定 |
+|---|---|---|---|
+| `/crypto@fe380000` status | disabled | okay | **已修 → okay** |
+| `/dfi@fe230000` status | okay | disabled | **已修 → disabled** |
+| `/rockchip-suspend` status | disabled | okay | **已修 → okay**（其余属性逐字节相同） |
+| `/bus-npu` pvtm-supply | `regulator@1c` | `tcs4525@1c` | 板级：同一颗 DCDC 的节点名不同 |
+| `/hdmi@fe0a0000` avdd-0v9/1v8-supply | LDO_REG1 / LDO_REG9 | 无 | 板级：R5S 这两路不由 PMIC 供 |
+| `/hdmi-sound` mclk-fs | 256 | 128 | 板级音频时钟比（Android 侧 48 kHz 用 256 分频） |
+| `/hdmi-sound` name | "HDMI" | "rockchip,hdmi0" | 仅声卡显示名 |
+| `/pinctrl/{gpu,npu,vop,hdmitx}/*` | — | — | 板级引脚驱动强度/上下拉（末 4 字节 pinconf） |
+| `/npu-opp-table` nvmem-cells | mbist-vmin id 103 | 108 | nvmem cell 按注册顺序编号，指向同一个 OTP cell |
+
+### 刻意不对齐的一项：`fiq-debugger`
+
+R5S 有 `/fiq-debugger`（`serial-id=2`、1 500 000 baud、irq-mode），T68M 没有。
+
+**不加，是有意的**：`fiq-debugger` 会接管 uart2（`fe660000`）的 FIQ 中断，而 uart2 是这块板
+**唯一的调试通道**。配错一个 pin group 就再也看不到任何串口输出，等于自断排障手段。
+它只是崩溃时的 FIQ 日志设施，不属于任何功能 IP；崩溃现场我们用 `ramoops`/pstore 兜
+（`ramoops@110000`，`record-size 0x20000`，与 R5S 配置相同）。
+
+### 实机验证（2026-11-04，`boot_align.img`）
+
+```
+DTB: rk3568-nanopi5-rev0f.dtb (172602)          ← 新 DTB 生效
+rk-crypto fe380000.crypto: CRYPTO V2.0.0.0 Accelerator successfully registered
+rockchip-pm rockchip-suspend: not set pwm-regulator-config   ← 仅提示，R5S 同样
+Initialized rknpu 0.9.8 ... on minor 1 / cur_freq=900000000 / failed to get ack = 0
+state ON 1366x768p60 / eth0..eth3 / sys.boot_completed=1
+连续两次 adb reboot 均正常回桌面（suspend 打开后 reboot 路径不受影响）
+```
+
+`rk-crypto ... invalid resource` 是 dtsi 里 crypto 声明了两段 reg、板级 dts 只映射一段导致的
+警告，驱动随后注册成功，`/dev/crypto` 存在——与 R5S 表现一致，不是缺陷。
+
+---
+
 ## 5. 已知遗留（都不影响使用）
 
 | 项 | 说明 |
