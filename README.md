@@ -91,6 +91,7 @@ A/B `tries-remain` 恢复成 7。
 
 | 文档 | 什么时候看 |
 |---|---|
+| [`docs/PROGRESS.md`](docs/PROGRESS.md) | **每天做了什么、还差什么** —— 每日进度表 + 未闭环清单，接手先读这张 |
 | [`docs/tfcard-android14-runbook.md`](docs/tfcard-android14-runbook.md) | 上板实操：9 个断点逐个修、判据、回滚、不拔卡换 boot |
 | [`docs/t68m-android14-plan.md`](docs/t68m-android14-plan.md) | 固件解剖、方案取舍、boot header SHA1 那一节（§7） |
 | [`docs/boot-verify-checklist.md`](docs/boot-verify-checklist.md) | 上电验收清单，把「能不能启动」变成可对照的判据 |
