@@ -133,3 +133,28 @@ build-t68m-usb  #6  update.img  2,378,732,106 B
                     sha256 c5174c8faa3df1de7752e12eacf6686e99944a2d40373bef9583d7b774b15436
 ```
 上电验收按 `docs/boot-verify-checklist.md` 走，第 ③ 行 `ANDROID: Hash OK` 是分水岭。
+
+---
+
+## 8. 2026-11-04 厂商完整包到手后的交叉核对
+
+用户重下了官方两个包（`rk3568-sd-android14-20251222.img.gz` 1,109,346,831 B、
+`rk3568-usb-android14-20251222.zip` 1,072,203,040 B），**§5 的阻塞解除**：
+
+- gzip 全流解码通过 → **7,799,999,488 B（7.26 GiB）**，17 分区 GPT 与 `parameter.txt` 逐项吻合。
+  （§1 记的 3.83 GiB 是断包尾部声明的 ISIZE，不是真实盘长。）
+- SD 内 `boot_a[0:56,453,120]` 与 USB 包 `boot.img` **逐字节相同**（md5 `f2445436…`）；
+  `uboot_a` 与 `uboot.img` 也相同（md5 `2e8c80e7…`）。两条发布渠道同源。
+- **算法互证**：`tools/rk_boot_id.py check` 在厂商 `boot.img` 上得到 MATCH
+  （`ef77b76c…`）。此前 `757de090…` 只有自家设备自证，现在是厂商独立样本给出的第三方验证。
+- **算法补记**：v2 头的摘要除 kernel/ramdisk/second 三段外，还要追加
+  `u32(recovery_dtbo_size)` 与 `u32(dtb_size)` 两个 size word（即使为 0）。
+  本仓库实现靠"零长度段同样喂 size"覆盖，与 `image-android.c` 的 `ctx.length` 两行加法等价；
+  重写工具时若按"三段"实现会漏 8 字节，哈希全错。
+- u-boot 解压后含 `Hash from header` / `Hash real` / `Hash does not match!`
+  → 校验确实编译在内，`CONFIG_ANDROID_BOOT_IMAGE_HASH` 不是猜测。
+- 注入后差异量化（厂商 → 我们）：kernel **0 B**、ramdisk **0 B**、
+  header 320 B（`second_size` 3 + `cmdline` 297 + `id` 20）、RSCE 5,071,659 B，
+  文件 56,453,120 → 58,161,152 B，DTB 槽 37 → 47（16 槽 = T68M 172,191 B）。
+
+完整对照见 `work/vendor-r5s/R5S对照报告.md`（工作区）。
