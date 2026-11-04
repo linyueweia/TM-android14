@@ -111,6 +111,12 @@ jobs:
           cp "$src" "$D/boot.orig.img"
           ls -l "$D" | head -30
 
+      - name: Self-test the boot hash fixer (synthetic fixture, no download)
+        run: |
+          set -euxo pipefail
+          python3 tools/test_rk_boot_id.py
+          python3 tools/rehearse_boot_pipeline.py
+
       - name: Inject T68M dtb into boot.img
         run: |
           set -eux
@@ -122,6 +128,22 @@ jobs:
           python3 tools/rsce_tool.py boot-replace "$D/boot.orig.img" \
             --pattern 'rk3568-nanopi5-rev*' --dtb "$DTB" --fill-revs 0-15 -o "$D/boot.img"
           python3 tools/rsce_tool.py boot-list "$D/boot.img" | grep -E 'entries=|rk3568' | head -20
+
+      - name: Fix boot header SHA1 (u-boot CONFIG_ANDROID_BOOT_IMAGE_HASH)
+        run: |
+          set -euxo pipefail
+          D=sd-fuse/android14
+          # Swapping the DTB inside the RSCE second stage changed the hashed content, so the
+          # 20-byte digest at header offset 0x240 is now stale. u-boot then aborts with
+          # "Hash from header / Hash real ... Failed to load android image" before the kernel
+          # is ever entered. This is NOT AVB: vbmeta is empty (flags=0x2 -> verification
+          # disabled), so there is nothing to re-sign -- it is u-boot's own boot.img SHA1.
+          # Without this step the image boots to u-boot, prints the T68M DTB, and dies.
+          python3 tools/rk_boot_id.py check "$D/boot.img" || true
+          python3 tools/rk_boot_id.py fix "$D/boot.img" -o "$D/boot.img.new"
+          mv "$D/boot.img.new" "$D/boot.img"
+          python3 tools/rk_boot_id.py check "$D/boot.img" | tee /tmp/bootid.txt
+          grep -q MATCH /tmp/bootid.txt
 
       - name: Assemble SD image
         run: |

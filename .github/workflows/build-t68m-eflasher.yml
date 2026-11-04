@@ -119,6 +119,18 @@ jobs:
             --pattern 'rk3568-nanopi5-rev*' --dtb "$DTB" --fill-revs 0-15 -o "$D/boot.img"
           python3 tools/rsce_tool.py boot-list "$D/boot.img" | grep -E 'entries=|rk3568' | head -20
 
+      - name: Fix boot header SHA1 (u-boot CONFIG_ANDROID_BOOT_IMAGE_HASH)
+        run: |
+          set -euxo pipefail
+          D=sd-fuse/android14
+          # DTB swap changed the hashed content -> header id[20]@0x240 is stale -> u-boot
+          # stops with "Failed to load android image". Not AVB (empty vbmeta, flags=0x2).
+          python3 tools/rk_boot_id.py check "$D/boot.img" || true
+          python3 tools/rk_boot_id.py fix "$D/boot.img" -o "$D/boot.img.new"
+          mv "$D/boot.img.new" "$D/boot.img"
+          python3 tools/rk_boot_id.py check "$D/boot.img" | tee /tmp/bootid.txt
+          grep -q MATCH /tmp/bootid.txt
+
       - name: Build eflasher image
         run: |
           set -euxo pipefail

@@ -59,3 +59,66 @@ uboot 二进制里：`rk3568-nanopi5-rev%02x.dtb`、`fdtfile`、`androidboot.dtb
 卡是 SD 整盘镜像，RK BootROM 优先 SD：刷坏只坏这张卡，板上 eMMC 里原有系统不受影响，
 不需要救砖卡。未知项只有两个 —— 友善 loader 的 DDR 参数能否带起 T68M 的颗粒、以及 hwrev 探测值；
 两者都在上电串口里立刻现形（u-boot 会打印 `DTB: <name> (<size>)`）。
+
+## 7. 2026-11-04 复查：三套产物"跑绿但必挂"的根因
+
+**结论：11-03 的 SD / eflasher / USB 三个 artifact 全部不可启动，缺的是 boot header 的 20 字节。**
+
+### 现象（实机 2026-11-03）
+
+```
+DTB: rk3568-nanopi5-rev0f.dtb (172191)      ← 槽位命中，DTB 是我们的，没问题
+Hash from header: 0xef77b76c…
+Hash real:        0x757de090…
+Failed to load android image
+AVB verify failed / Android boot failed, error -1.
+```
+之后回落 eMMC 的 `boot.scr`（安卓 u-boot 不认 iNetOS 命令 → 乱码 SCRIPT FAILED），再掉进 PXE，
+两口 PHY 各 -110 超时循环 —— 看起来像 loader/DDR 崩了，其实只是 20 字节。
+
+### 为什么
+
+RK u-boot 开了 `CONFIG_ANDROID_BOOT_IMAGE_HASH`，`common/image-android.c` 在进内核前校验 boot.img：
+期望值存在 **AOSP v2 header 偏移 0x240 的 `id[8]`**（RK 复用那 32 字节）。摘要覆盖：
+
+```
+for seg in (kernel, ramdisk, second[, recovery_dtbo[, dtb]]):
+    sha1.update(data[:size]); sha1.update(u32le(size))
+```
+（`image_load()` 里 `crypto_sha_update(data,datasz)` + `crypto_sha_update(&datasz,4)`；
+ kernel 段先 `ramdst += pgsz; datasz -= pgsz`，所以 header 页不进 hash；size==0 的段仍喂 4 字节零）
+
+`rsce_tool.py boot-replace` 换了 RSCE 里的 DTB → 内容变了 → id 还是原厂的 → 校验失败。
+
+**不是 AVB**：`vbmeta` 是空的（`flags=0x2` = VERIFICATION_DISABLED），没有 descriptor 可重签。
+日志里的 `OK_NOT_SIGNED` 是**通过**，不是错误。
+
+### 当时的流水线
+
+三个 workflow 的注入步骤只做了 `boot-replace` + `boot-list`，**没有回写 id**；
+`tools/rk_boot_id.py` 甚至不在仓库里。所以 CI 绿了，产物是废的。
+
+### 现在
+
+```
+tools/rk_boot_id.py              check / fix / info   ← 新增
+tools/test_rk_boot_id.py         合成 v1/v2 夹具，12 项断言
+tools/rehearse_boot_pipeline.py  用真实 T68M DTB 走 boot-replace → check → fix → check
+```
+三条 workflow 在注入之后都加了 `Fix boot header SHA1`，并以 `check` 输出 MATCH 作为门禁。
+
+本地排练实测（合成容器 + 真 DTB 172191 B）：
+```
+boot-replace  3,172,352 -> 4,874,240 B（second 变长，正常）
+check         MISMATCH            ← 注入后必然失配，因果链成立
+fix           20 byte(s) changed  ← 只动 0x240..0x253
+check         MATCH
+boot-list     16/16 槽 = LYT T68M (172191 B)
+```
+
+### 仍未验证
+
+- 友善 loader 的 DDR `sdram_configs_g` 能否带起 T68M 的颗粒（代码同源不等于表相同，见技能 §9）
+- hwrev 实际探测值（16 槽已铺满，任一号都命中，风险已消除）
+- NPU 在 Android 14 + 6.1 vendor 上是否 `panic_on_set_idle`（fnOS 线会崩，Android 出货板是全 okay）
+- 实机一次都没跑过；下一轮上电看串口第四行是否变成 `ANDROID: Hash OK`

@@ -18,6 +18,13 @@ GitHub Actions（ubuntu-latest）分两步走：
 ## 状态
 
 - [x] 仓库创建
-- [ ] probe 通过（拿到磁盘/克隆体积判据）
-- [ ] T68M DTS 移植进 Android SDK 内核树
-- [ ] 镜像产出与实机启动验证
+- [x] probe 通过（runner 磁盘余量 + gitea 可达性判据）
+- [x] T68M DTS 移植进 Android SDK 内核树 → `dist/rk3568-lyt-t68m-android.dtb`（172,191 B，NPU/optee/cma/ramoops 已开）
+- [x] 镜像产出：SD / eflasher / USB(update.img) 三条流水线
+- [x] boot header SHA1 修正器 `tools/rk_boot_id.py`（**11-03 的产物缺这一步，全部不可启动**，见 `docs/t68m-android14-plan.md` §7）
+- [ ] 实机启动验证：串口第四行要看到 `ANDROID: Hash OK`，再看到内核日志
+
+## 现状一句话
+
+板级这一侧已闭环（DTB 命中、hwrev 16 槽铺满、boot 摘要自校正），剩下的是**上电**：
+DDR 配置表能否带起 T68M 颗粒、NPU 在 Android 14 上是否 panic。两者都只在实机串口里现形。
