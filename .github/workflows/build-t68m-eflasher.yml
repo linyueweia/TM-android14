@@ -136,8 +136,12 @@ jobs:
           fi
           echo "gate: dtb patches OK (npu/iommu fail, vop plane-mask, always-on, no-1-8-v)"
 
-          python3 tools/rsce_tool.py boot-replace "$D/boot.orig.img" \
-            --pattern 'rk3568-nanopi5-rev*' --dtb "$DTB" --fill-revs 0-15 -o "$D/boot.img"
+          # 同 build-t68m-sd：必须走 make_lite_boot.py。47 条目时单槽只有 172,544 B，
+          # 而本版 dtb 是 172,602 B（NPU 三属性 + vop plane-mask），boot-replace 会把
+          # 第 19 个槽的开头踩掉。
+          python3 tools/make_lite_boot.py "$D/boot.orig.img" "$DTB" "$D/boot.img" | tee /tmp/lite.txt
+          grep -q 'entries=18' /tmp/lite.txt
+          grep -qE 'headroom (0|[1-9][0-9]*) B' /tmp/lite.txt
           python3 tools/rsce_tool.py boot-list "$D/boot.img" | grep -E 'entries=|rk3568' | head -20
 
       - name: Serial console on ttyS2 (this board's DTB has no fiq-debugger)

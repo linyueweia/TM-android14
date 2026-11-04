@@ -74,8 +74,11 @@ jobs:
           pick() { find parts -name "$1" -type f | head -1; }
           src=$(pick boot.img); [ -n "$src" ] || { echo "no boot.img"; exit 1; }
           cp "$src" "$D/boot.orig.img"
-          python3 tools/rsce_tool.py boot-replace "$D/boot.orig.img" \
-            --pattern 'rk3568-nanopi5-rev*' --dtb "$DTB" --fill-revs 0-15 -o "$D/boot.img"
+          # 同 SD/eflasher：必须走 make_lite_boot.py，boot-replace 会按 47 条目布局，
+          # 单槽 172,544 B 装不下 172,602 B 的 dtb。
+          python3 tools/make_lite_boot.py "$D/boot.orig.img" "$DTB" "$D/boot.img" | tee /tmp/lite.txt
+          grep -q 'entries=18' /tmp/lite.txt
+          grep -qE 'headroom (0|[1-9][0-9]*) B' /tmp/lite.txt
           python3 tools/rsce_tool.py boot-list "$D/boot.img" | grep -E 'entries=|rk3568' | head -8
 
           # A silently skipped file turns into a broken package 3 steps later (empty

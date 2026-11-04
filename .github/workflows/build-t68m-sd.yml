@@ -146,8 +146,14 @@ jobs:
           fi
           echo "gate: dtb patches OK (npu/iommu fail, vop plane-mask, always-on, no-1-8-v)"
 
-          python3 tools/rsce_tool.py boot-replace "$D/boot.orig.img" \
-            --pattern 'rk3568-nanopi5-rev*' --dtb "$DTB" --fill-revs 0-15 -o "$D/boot.img"
+          # 用 make_lite_boot.py，不用 boot-replace。后者保留全部 47 个条目（含
+          # rk3399/rk3566/rk3576/rk3588 的 29 个死 blob，6.34 MB），单槽容量只有
+          # 172,544 B —— 本版 dtb 已经 172,602 B（NPU 三个属性 + vop plane-mask）。
+          # 精简到 16 个 T68M 槽 + 2 个 logo 后，末槽容量 = second_size - 末槽偏移，
+          # 与实机验证过的 board/boot_align.img 走同一条构建路径。
+          python3 tools/make_lite_boot.py "$D/boot.orig.img" "$DTB" "$D/boot.img" | tee /tmp/lite.txt
+          grep -q 'entries=18' /tmp/lite.txt
+          grep -qE 'headroom (0|[1-9][0-9]*) B' /tmp/lite.txt
           python3 tools/rsce_tool.py boot-list "$D/boot.img" | grep -E 'entries=|rk3568' | head -20
 
       - name: Serial console on ttyS2 (this board's DTB has no fiq-debugger)
