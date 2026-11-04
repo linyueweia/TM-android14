@@ -32,10 +32,16 @@ import fdt_edit as F  # noqa: E402
 REF_PROPS = (
     "-supply", "iommus", "remote-endpoint", "clocks", "power-domains",
     "resets", "dmas", "phys", "phy-handle", "sound-dai", "memory-region",
-    "nvmem-cells", "io-channels", "mboxes", "rockchip,srv", "rockchip,grf",
-    "rockchip,pmu", "-gpios", "-gpio", "operating-points-v2", "syscon",
+    "nvmem-cells", "io-channels", "mboxes", "rockchip,srv", "rockchip,sram",
+    "rockchip,grf", "rockchip,pmu", "-gpios", "-gpio",
+    "pinctrl-", "rockchip,pins", "thermal-sensors", "operating-points-v2", "syscon",
     "rockchip,codec", "rockchip,display-subsystem",
 )
+
+# 这几个属性的值是**纯 phandle 列表**（没有紧跟的 specifier），每个 u32 都要解析。
+# `pinctrl-0 = <&a &b &c>`、`xxx-supply = <&reg>`、`remote-endpoint = <&ep>` 都是这种。
+# 其余（clocks/resets/iommus/*-gpios）是 `<&provider spec spec ...>` 交替，只解析下标 0。
+ALL_PHANDLE = ("pinctrl-", "-supply", "remote-endpoint", "phy-handle")
 
 IP_KEYS = ("npu", "gpu", "rkvdec", "rkvenc", "vdpu", "vepu", "rga", "iep",
            "jpeg", "vop", "hdmi", "iommu", "bus-npu", "mpp", "dfi", "rng",
@@ -72,12 +78,23 @@ def norm(name, val, ph2path):
     if len(val) % 4:
         return val
     out = []
+    allph = any(k in name for k in ALL_PHANDLE) and "pinctrl-names" not in name
     for i in range(0, len(val), 4):
         v = struct.unpack(">I", val[i:i + 4])[0]
-        if i % 8 == 0 and v in ph2path:
-            out.append("<%s>" % ph2path[v])
+        if name == "rockchip,pins":
+            # <bank pin func &pcfg> —— 只有第 4 个 u32 可能是 phandle
+            hit = (i % 16 == 12) and v in ph2path
+        elif name == "nvmem-cells":
+            # <&provider cell-id> 交替。cell-id 是按 provider 注册顺序现编的，
+            # 两块板节点集合不同就会差 1（104 vs 103），但指向同一个 OTP cell。
+            # 只比 provider，specifier 用 * 抹平。
+            hit = (i % 8 == 0) and v in ph2path
+            if not hit and i % 8 == 4:
+                out.append("*")
+                continue
         else:
-            out.append(str(v))
+            hit = (allph or i % 8 == 0) and v in ph2path
+        out.append("<%s>" % ph2path[v] if hit else str(v))
     return " ".join(out)
 
 

@@ -128,9 +128,16 @@ jobs:
           done
           python3 tools/dtb_diff.py "$D" dist/rk3568-lyt-t68m-android.dtb --only-ip > /tmp/ipdiff.txt
           head -3 /tmp/ipdiff.txt
+          # 源码编译产物与仓库里的 dist 必须在**所有 SoC IP 属性**上零差异
+          # （phandle 编号、nvmem cell 序号这类无意义差异，dtb_diff 已归一化）。
+          # 一旦这里红了，说明 dts 和 dist 漂移了 —— 用 dts 编出来的固件就不是
+          # 实机验证过的那份。
           if grep -qE '语义差异（[1-9][0-9]*）' /tmp/ipdiff.txt; then
-            echo "WARN: 源码编译产物与 dist 存在 IP 差异（下面列全）"; cat /tmp/ipdiff.txt
+            echo "FATAL: 源码编译的 dtb 与 dist 存在 IP 差异："
+            cat /tmp/ipdiff.txt
+            exit 1
           fi
+          echo "dist parity OK (0 IP diff)"
           echo "feature parity OK"
           mkdir -p out
           cp "$D" out/
