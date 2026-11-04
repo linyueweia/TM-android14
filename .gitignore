@@ -6,3 +6,7 @@ r5s_dl.html
 *_log.bin
 
 tmp_work/
+
+# python
+__pycache__/
+*.pyc

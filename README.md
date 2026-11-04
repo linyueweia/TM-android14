@@ -77,3 +77,19 @@ SD 控制器 pinctrl 层级、super sparse→raw、A/B tries 扣光、vop plane 
 从厂商包到「HDMI 出桌面 + 重启可用」已全链路跑通，**改的只是一个 DTB**（外加重算 boot header 摘要）。
 剩下的都是优化项，不是功能缺陷：second 段瘦身（31 个别的板子的 DTB 白占 6.34 MB）、
 A/B `tries-remain` 恢复成 7。
+
+## 文档索引
+
+| 文档 | 什么时候看 |
+|---|---|
+| [`docs/tfcard-android14-runbook.md`](docs/tfcard-android14-runbook.md) | 上板实操：9 个断点逐个修、判据、回滚、不拔卡换 boot |
+| [`docs/t68m-android14-plan.md`](docs/t68m-android14-plan.md) | 固件解剖、方案取舍、boot header SHA1 那一节（§7） |
+| [`docs/boot-verify-checklist.md`](docs/boot-verify-checklist.md) | 上电验收清单，把「能不能启动」变成可对照的判据 |
+| [`docs/usb-flash-readme.txt`](docs/usb-flash-readme.txt) | USB 线刷三步走（随刷机包一起分发） |
+| [`tools/README.md`](tools/README.md) | 工具集速查：按症状找脚本 |
+
+## 一条硬纪律
+
+**「构建成功」≠「能启动」。** CI 绿了只证明构建链完整（产物尺寸、`entries=18`、`grep rev0f.dtb`、
+IP 功能矩阵 0 差异），不证明冷启动能过。判定能不能起，只看串口那三行：
+`DTB: <name> (<size>)`、`androidboot.dtb_idx=`、以及 `Trying to boot from MMC1/MMC2`。
