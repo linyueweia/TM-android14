@@ -121,16 +121,10 @@ jobs:
           grep -q 'GPU .*<<< DIFF' /tmp/features.txt && { echo "GPU disabled"; exit 1; } || true
           grep -q 'VPU-dec .*<<< DIFF' /tmp/features.txt && { echo "VPU-dec disabled"; exit 1; } || true
           # 三个 IP 级开关必须和 R5S 基线一致（crypto / dfi / 休眠框架）
+          # 不要在这里用 heredoc：块标量里结束符若顶格会直接把 YAML 截断
+          # （2026-11-04 踩过，workflow 变成 "does not have workflow_dispatch trigger"）。
           for n in crypto@fe380000 dfi@fe230000 rockchip-suspend; do
-            st=$(python3 - "$D" "$n" <<'PY'
-import sys
-sys.path.insert(0, "tools")
-import dtb_diff as D
-N, _ = D.load(sys.argv[1])
-print(N.get("/" + sys.argv[2], {}).get("status", b"<absent>").rstrip(b"\0").decode())
-PY
-)
-            echo "status($n) = $st"
+            python3 -c "import sys;sys.path.insert(0,'tools');import dtb_diff as D;N,_=D.load('$D');v=N.get('/'+'$n',{}).get('status',b'<absent>');print('status($n) =', v.rstrip(b'\0').decode())"
           done
           python3 tools/dtb_diff.py "$D" dist/rk3568-lyt-t68m-android.dtb --only-ip > /tmp/ipdiff.txt
           head -3 /tmp/ipdiff.txt
