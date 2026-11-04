@@ -988,7 +988,7 @@
 	status = "okay";
 };
 
-&/* 对齐厂商 R5S 基线：DFI 是 DDR 调试接口，Android 侧没人用，开着只是多占一个
+/* 对齐厂商 R5S 基线：DFI 是 DDR 调试接口，Android 侧没人用，开着只是多占一个
  * 地址窗口。OpenWrt 的 t68m dts 打开它是为了 devfreq 读 DDR 频率。 */
 &dfi {
 	status = "disabled";

@@ -80,9 +80,17 @@ jobs:
 
       - name: Build T68M dtb
         run: |
+          # pipefail 必须有：`make ... | tee | tail` 只看 tail 的退出码，dts 语法
+          # 错误时 make 已经失败而步骤仍显示 success —— 2026-11-04 就是这样假绿了
+          # 一轮，artifact 里装的还是缓存里的旧 dtb（172,259 B）。
+          set -euo pipefail
           cd sdk/kernel-6.1
           make ARCH=arm64 -j$(nproc) rockchip/rk3568-lyt-t68m.dtb 2>&1 | tee /tmp/dtb_build.log | tail -30
-          ls -l arch/arm64/boot/dts/rockchip/rk3568-lyt-t68m.dtb
+          D=arch/arm64/boot/dts/rockchip/rk3568-lyt-t68m.dtb
+          test -s "$D"
+          sz=$(stat -c %s "$D"); echo "dtb size=$sz"
+          [ "$sz" -gt 170000 ] || { echo "FATAL: dtb 只有 $sz B，明显没真编译"; exit 1; }
+          ls -l "$D"
 
       - name: Evidence
         run: |
@@ -105,11 +113,30 @@ jobs:
       # shows up later as "rknn won't init" or "gralloc allocation failed".
       - name: Assert feature parity
         run: |
+          set -euo pipefail
           D=sdk/kernel-6.1/arch/arm64/boot/dts/rockchip/rk3568-lyt-t68m.dtb
+          test -s "$D" || { echo "FATAL: dtb 不存在，上一构建步骤其实失败了"; exit 1; }
           python3 tools/dtb_features.py "$D" --base dist/rk3568-nanopi5-rev01-base.dtb             | grep -E '^(NPU|GPU|VPU-dec|VPU-enc|RGA|OP-TEE|CMA) ' | tee /tmp/features.txt
           grep -q 'NPU .*<<< DIFF' /tmp/features.txt && { echo "NPU still disabled"; exit 1; } || true
           grep -q 'GPU .*<<< DIFF' /tmp/features.txt && { echo "GPU disabled"; exit 1; } || true
           grep -q 'VPU-dec .*<<< DIFF' /tmp/features.txt && { echo "VPU-dec disabled"; exit 1; } || true
+          # 三个 IP 级开关必须和 R5S 基线一致（crypto / dfi / 休眠框架）
+          for n in crypto@fe380000 dfi@fe230000 rockchip-suspend; do
+            st=$(python3 - "$D" "$n" <<'PY'
+import sys
+sys.path.insert(0, "tools")
+import dtb_diff as D
+N, _ = D.load(sys.argv[1])
+print(N.get("/" + sys.argv[2], {}).get("status", b"<absent>").rstrip(b"\0").decode())
+PY
+)
+            echo "status($n) = $st"
+          done
+          python3 tools/dtb_diff.py "$D" dist/rk3568-lyt-t68m-android.dtb --only-ip > /tmp/ipdiff.txt
+          head -3 /tmp/ipdiff.txt
+          if grep -qE '语义差异（[1-9][0-9]*）' /tmp/ipdiff.txt; then
+            echo "WARN: 源码编译产物与 dist 存在 IP 差异（下面列全）"; cat /tmp/ipdiff.txt
+          fi
           echo "feature parity OK"
           mkdir -p out
           cp "$D" out/
