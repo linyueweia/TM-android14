@@ -114,16 +114,18 @@ jobs:
           D=sd-fuse/android14
           DTB="${{ github.event.inputs.dtb }}"
           python3 tools/dtb_features.py "$DTB" --base dist/rk3568-nanopi5-rev01-base.dtb | tee /tmp/feat.txt
-          # NPU must be status=fail. Real-hardware verdict (2026-11-04): with NPU okay this
-          # board panics at 7.6 s in rockchip_pmu_set_idle_request(panic_on_set_idle), and the
-          # node probed first is iommu@fde4b000, not npu@fde40000 -- disabling only npu is not
-          # enough. The old gate asserted the opposite ("NPU still disabled" => fail); it encoded
-          # a conclusion that field testing has since disproved.
+          # NPU stays ENABLED, same as FriendlyElec's own R5S image. The 7.6 s panic
+          # ("failed to get ack on domain 'npu'") was never a reason to disable it: this DTS
+          # was missing vdd_npu(DCDC_REG4) regulator-always-on / -boot-on / -init-microvolt,
+          # which the R5S baseline dtb has, so the NPU domain was unpowered when its iommu
+          # attached to it at 7.6 s and the PMU idle-request never got its ack.
           npu_row=$(grep -E '^NPU[[:space:]]' /tmp/feat.txt || true)
           echo "gate: $npu_row"
           case "$npu_row" in
-            *fail*) echo "OK: NPU disabled, as required on T68M" ;;
-            *) echo "FATAL: NPU must be status=fail on T68M (7.6 s panic otherwise)"; exit 1 ;;
+            *fail*) echo "FATAL: NPU must stay enabled (R5S parity); if it panics with"
+                    echo "       'failed to get ack on domain npu', vdd_npu lost always-on"
+                    exit 1 ;;
+            *) echo "OK: NPU enabled, matching R5S" ;;
           esac
           # Patches that are only visible in the dtb bytes, not in the feature matrix.
           for s in 'rockchip,plane-mask' 'rockchip,primary-plane' 'regulator-always-on' 'no-1-8-v'; do

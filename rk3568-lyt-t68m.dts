@@ -443,6 +443,9 @@
 
 			vdd_npu: DCDC_REG4 {
 				regulator-name = "vdd_npu";
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-init-microvolt = <900000>;
 				regulator-initial-mode = <0x2>;
 				regulator-min-microvolt = <500000>;
 				regulator-max-microvolt = <1350000>;
@@ -952,29 +955,29 @@
  * 标签必然存在）。刻意保持一致的一项：
  *   - dmc：官方基线里就是 disabled（不开 DDR 调频），此处不动
  *
- * NPU 与 fnOS 那份板级 DTS **有意分叉**：
- *   - fnOS / lyw-OS 的 vendor 6.1 内核上 NPU 必须 disabled —— 打开后 15.93s
- *     必 panic（rockchip-pm-domain 向 npu 域发 idle 请求等不到 ack：
- *     "failed to get ack on domain 'npu', val=0x1ee"，vendor 内核的
- *     panic_on_set_idle 直接 Kernel panic，K1 实机复现）。
- *   - Android 14 这份 SDK 的板级基线（rk3568-nanopi5-rev01.dtb）里
- *     npu / bus-npu / iommu@fde4b000 全部 status="okay"，且带
- *     rknpu-supply / bus-supply / pvtm-supply 三个 regulator。
- *     **但那只是友善出货板（NanoPi R5S）的形态，不能当作 T68M 也能开 NPU 的证据。**
- *     T68M 实机（Android 14，2026-11-04）7.6 s 必 panic，栈顶是
- *     rk_iommu_driver_init → platform_probe → dev_pm_domain_attach → genpd_power_on
- *     → rockchip_pmu_set_idle_request → panic("panic_on_set_idle set")，val=0x6。
- *     注意**先 probe 的是 iommu@fde4b000，不是 npu@fde40000**，只关 npu 不够。
- *     结论：两者都要 status="fail"（"fail\0" 与 "okay\0" 同为 5 字节，可原地覆盖）。
+ * NPU：**保持 npu / iommu / bus-npu 全部 okay，与友善出货板 R5S 一致。**
+ *   - 曾经把它设成 status="fail"，理由是 T68M 上 7.6 s 必 panic：
+ *       failed to get ack on domain 'npu', target_idle = 0, target_ack = 0, val=0x6
+ *       Kernel panic - not syncing: panic_on_set_idle set ...
+ *       rockchip_pmu_set_idle_request <- rockchip_pd_power <- rockchip_pd_power_on
+ *       <- genpd_power_on <- dev_pm_domain_attach   （先 probe 的是 iommu，不是 npu）
+ *     **但那不是 SoC 的错，是这份 DTS 的 vdd_npu 少了三条属性。**
+ *     R5S 基线 dtb 的 DCDC_REG4（vdd_npu）带 regulator-always-on / -boot-on /
+ *     -init-microvolt=<900000>；我们这棵树当初只搬了电压范围，漏了这三条 ⇒
+ *     NPU 的 iommu 在 7.6 s 挂到 domain 6 时 VDD_NPU 是关的，PMU 等不到 idle ack。
+ *     同 SoC、同 PMIC（RK817），R5S 能开，说明硬件本来就支持；补上这三条即可。
+ *   - 判据（再遇到时按这个查，不要直接关 NPU）：dmesg 里 `failed to get ack on
+ *     domain 'npu'` 先看 vdd_npu 有没有 always-on/boot-on，再看 rknpu-supply 指向
+ *     哪个 regulator；只有确认那一路在板子上根本没接，才考虑 status="fail"。
  * ══════════════════════════════════════════════════════════════════ */
-/* NPU：T68M 必须关，且 npu 与其 iommu 都要关（见上方 2026-11-04 实机结论） */
+/* NPU：与 R5S 对齐打开；供电要求见 vdd_npu(DCDC_REG4) 的 always-on/boot-on */
 &rknpu {
 	rknpu-supply = <&vdd_npu>;
-	status = "fail";
+	status = "okay";
 };
 
 &rknpu_mmu {
-	status = "fail";
+	status = "okay";
 };
 
 &bus_npu {
