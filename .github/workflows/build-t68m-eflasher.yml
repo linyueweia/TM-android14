@@ -142,7 +142,8 @@ jobs:
           python3 tools/make_lite_boot.py "$D/boot.orig.img" "$DTB" "$D/boot.img" | tee /tmp/lite.txt
           grep -q 'entries=18' /tmp/lite.txt
           grep -qE 'headroom (0|[1-9][0-9]*) B' /tmp/lite.txt
-          python3 tools/rsce_tool.py boot-list "$D/boot.img" | grep -E 'entries=|rk3568' | head -20
+          python3 tools/rsce_tool.py boot-list "$D/boot.img" | tee /tmp/list.txt | grep -E 'entries=|rk3568' | head -20
+          grep -q 'rev0f\.dtb' /tmp/list.txt || { echo "FATAL: no rev0f slot (board is hwrev 0x0f)"; exit 1; }
 
       - name: Serial console on ttyS2 (this board's DTB has no fiq-debugger)
         run: |

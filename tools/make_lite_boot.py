@@ -26,6 +26,7 @@ Usage
 
 import argparse
 import hashlib
+import re
 import struct
 import sys
 
@@ -92,6 +93,8 @@ def main():
     ap.add_argument("--keep", default=DEFAULT_KEEP,
                     help="comma separated glob list of entry names to keep")
     ap.add_argument("--model", default="LYT T68M")
+    ap.add_argument("--fill-revs", default="0-15",
+                    help="补齐缺失的 rev 槽（默认 0-15，空字符串=不补）")
     a = ap.parse_args()
 
     boot = open(a.boot, "rb").read()
@@ -116,6 +119,28 @@ def main():
         raise SystemExit("no board slots kept -- refusing to build a card that cannot boot")
     for e in board:
         e["data"] = dtb
+
+    # 补齐缺失的 rev 槽。SD 包里的 boot.img 只带 rev01..rev07（37 条目版），而这
+    # 块板的 hwrev 是 0x0f —— u-boot 按**名字**选 dtb，找不到 rk3568-nanopi5-rev0f.dtb
+    # 就是无 dtb 可用。PC 上那张卡的 boot.img 是 47 条目版，碰巧带 rev0f，所以这个
+    # 缺口只会在 CI 产物上暴露。补满 0-15，全部写同一份 dtb。
+    added = []
+    if a.fill_revs:
+        lo, hi = (int(x, 0) for x in a.fill_revs.split("-"))
+        m = re.search(r"rev([0-9a-fA-F]{2})", board[0]["name"])
+        if not m:
+            raise SystemExit("cannot derive rev template from %r" % board[0]["name"])
+        tpl = board[0]["name"][:m.start(1)] + "%02x" + board[0]["name"][m.end(1):]
+        have = {e["name"] for e in keep}
+        for rev in range(lo, hi + 1):
+            nm = tpl % rev
+            if nm in have:
+                continue
+            keep.append({"idx": len(keep), "name": nm, "raw": board[0]["raw"],
+                         "offset": 0, "size": len(dtb), "data": dtb})
+            added.append(nm)
+        if added:
+            print("  filled %d missing rev slot(s): %s" % (len(added), ", ".join(added)))
 
     print("second %d B, %d entries -> keep %d, drop %d" %
           (ssize, len(entries), len(keep), len(drop)))
