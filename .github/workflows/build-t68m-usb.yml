@@ -57,6 +57,33 @@ jobs:
             --pattern 'rk3568-nanopi5-rev*' --dtb "$DTB" --fill-revs 0-15 -o "$D/boot.img"
           python3 tools/rsce_tool.py boot-list "$D/boot.img" | grep -E 'entries=|rk3568' | head -8
 
+          # A silently skipped file turns into a broken package 3 steps later (empty
+          # parameter.txt -> BK='' -> the && chain returns 1 -> confusing "exit code 1").
+          # Collect the misses and fail here, where the reason is obvious.
+          missing=""
+          for f in parameter.txt MiniLoaderAll.bin uboot.img misc.img dtbo.img vbmeta.img \
+                   super.img baseparameter.img; do
+            s=$(pick "$f" || true)
+            if [ -n "$s" ]; then cp "$s" "$D/$f"; else echo "MISSING $f"; missing="$missing $f"; fi
+          done
+          ls -l "$D"
+          if [ -n "$missing" ]; then echo "bundle did not provide:$missing"; exit 1; fi
+
+
+      - name: Serial console on ttyS2 (this board's DTB has no fiq-debugger)
+        run: |
+          set -euxo pipefail
+          D=usb
+          # The board DTS is a Linux one: uart2 (0xfe660000) is driven by 8250 and
+          # /chosen/stdout-path = "serial2:1500000n8" -- that is the console proven on this
+          # board (COM3 @ 1500000).  There is no /fiq-debugger node, so the vendor's
+          # "console=ttyFIQ0" has no driver: after earlycon the kernel prints nowhere and the
+          # board looks dead while it boots.  Point the cmdline at ttyS2 instead.
+          python3 tools/boot_cmdline.py show "$D/boot.img" || true
+          python3 tools/boot_cmdline.py set "$D/boot.img" -o "$D/boot.cmd.img" --console ttyS2,1500000
+          mv "$D/boot.cmd.img" "$D/boot.img"
+          python3 tools/boot_cmdline.py show "$D/boot.img" | grep -q 'console=ttyS2,1500000'
+
       - name: Fix boot header SHA1 (u-boot CONFIG_ANDROID_BOOT_IMAGE_HASH)
         run: |
           set -euxo pipefail
@@ -68,13 +95,6 @@ jobs:
           mv "$D/boot.img.new" "$D/boot.img"
           python3 tools/rk_boot_id.py check "$D/boot.img" | tee /tmp/bootid.txt
           grep -q MATCH /tmp/bootid.txt
-          for f in parameter.txt MiniLoaderAll.bin uboot.img misc.img dtbo.img vbmeta.img \
-                   super.img baseparameter.img; do
-            s=$(pick "$f" || true)
-            if [ -n "$s" ]; then cp "$s" "$D/$f"; else echo "MISSING $f"; fi
-          done
-          ls -l "$D"
-
       - name: Build update.img (Rockchip RKAF)
         run: |
           set -euxo pipefail
@@ -91,8 +111,16 @@ jobs:
 
           # rkImageMaker -os_type:androidos 强制要求 backup 分区（"No found backup partition!"），
           # 友善的分区包不带 backup.img -> 按 parameter.txt 里的扇区数造一个零文件
-          BK=$(sed -n 's/.*CMDLINE:[^:]*://p' parameter.txt | tr ',' '\n' | grep -oE '0x[0-9a-f]+@0x[0-9a-f]+\(backup\)' | cut -d'@' -f1 | head -1)
-          if [ -n "$BK" ] && [ ! -f backup.img ]; then
+          # `set -e` aborts on the ASSIGNMENT itself if sed cannot read the file, which
+          # surfaces as a bare "exit code 1" with no message.  Guard it explicitly.
+          [ -f parameter.txt ] || { echo "parameter.txt missing from the package dir"; ls -l; exit 1; }
+          BK=$(sed -n 's/.*CMDLINE:[^:]*://p' parameter.txt | tr ',' '\n' | grep -oE '0x[0-9a-f]+@0x[0-9a-f]+\(backup\)' | cut -d'@' -f1 | head -1) || true
+          if [ -z "$BK" ]; then
+            echo "parameter.txt has no backup partition; rkImageMaker -os_type:androidos will refuse"
+            sed -n 's/.*CMDLINE:[^:]*://p' parameter.txt | head -2
+            exit 1
+          fi
+          if [ ! -f backup.img ]; then
             truncate -s $(( BK * 512 )) backup.img
             echo "created backup.img $(( BK * 512 )) bytes (from parameter.txt)"
           fi

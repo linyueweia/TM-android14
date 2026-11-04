@@ -119,6 +119,20 @@ jobs:
             --pattern 'rk3568-nanopi5-rev*' --dtb "$DTB" --fill-revs 0-15 -o "$D/boot.img"
           python3 tools/rsce_tool.py boot-list "$D/boot.img" | grep -E 'entries=|rk3568' | head -20
 
+      - name: Serial console on ttyS2 (this board's DTB has no fiq-debugger)
+        run: |
+          set -euxo pipefail
+          D=sd-fuse/android14
+          # The board DTS is a Linux one: uart2 (0xfe660000) is driven by 8250 and
+          # /chosen/stdout-path = "serial2:1500000n8" -- that is the console proven on this
+          # board (COM3 @ 1500000).  There is no /fiq-debugger node, so the vendor's
+          # "console=ttyFIQ0" has no driver: after earlycon the kernel prints nowhere and the
+          # board looks dead while it boots.  Point the cmdline at ttyS2 instead.
+          python3 tools/boot_cmdline.py show "$D/boot.img" || true
+          python3 tools/boot_cmdline.py set "$D/boot.img" -o "$D/boot.cmd.img" --console ttyS2,1500000
+          mv "$D/boot.cmd.img" "$D/boot.img"
+          python3 tools/boot_cmdline.py show "$D/boot.img" | grep -q 'console=ttyS2,1500000'
+
       - name: Fix boot header SHA1 (u-boot CONFIG_ANDROID_BOOT_IMAGE_HASH)
         run: |
           set -euxo pipefail
