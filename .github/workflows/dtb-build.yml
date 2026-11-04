@@ -144,6 +144,47 @@ jobs:
           cp /tmp/dtb_build.log out/ 2>/dev/null || true
           tar -czf out.tgz out
 
+      # 上面那条 parity 是 --only-ip，只覆盖 SoC IP 节点。/hdmi-sound 是**板级**节点，
+      # 不在它的检查面内 —— mclk-fs 被改回 256 时 CI 依然全绿，而那样构建出的固件是
+      # 「有画面没声音」，且内核日志零报错，只有上板放音乐才发现。必须单独断言。
+      - name: Assert HDMI audio fix present
+        run: |
+          set -euo pipefail
+          D=sdk/kernel-6.1/arch/arm64/boot/dts/rockchip/rk3568-lyt-t68m.dtb
+          test -s "$D" || { echo "FATAL: dtb 不存在"; exit 1; }
+          python3 - "$D" <<'PY'
+          import sys
+          sys.path.insert(0, 'tools')
+          import dtb_diff as D
+          built, _ = D.load(sys.argv[1])
+          ref, _ = D.load('dist/rk3568-lyt-t68m-android.dtb')
+          bad = []
+          for tag, N in (('built', built), ('dist', ref)):
+              h = N.get('/hdmi-sound') or {}
+              mclk = h.get('simple-audio-card,mclk-fs')
+              name = (h.get('simple-audio-card,name') or b'').rstrip(b'\x00')
+              if mclk != b'\x00\x00\x00\x80':
+                  bad.append('%s: mclk-fs=%r, want 128 (0x80)' % (tag, mclk))
+              else:
+                  print('%s: mclk-fs = 128 OK' % tag)
+              if name != b'rockchip,hdmi0':
+                  bad.append('%s: card name=%r, want rockchip,hdmi0' % (tag, name))
+              else:
+                  print('%s: card name = %s OK' % (tag, name.decode()))
+          # 三条构建流水线注入的就是 dist 那份，它必须与源码编译产物在这一节点上完全一致，
+          # 否则「固件用的是最新 dtb」这个前提不成立。
+          bh, rh = built.get('/hdmi-sound') or {}, ref.get('/hdmi-sound') or {}
+          dd = {k for k in set(bh) | set(rh) if bh.get(k) != rh.get(k)}
+          if dd:
+              bad.append('/hdmi-sound differs from dist: %s' % sorted(dd))
+          else:
+              print('/hdmi-sound identical to dist OK')
+          if bad:
+              print('FATAL: HDMI 音频修复缺失或与 dist 漂移 —— 构建出的固件会没声音')
+              for b in bad: print('  -', b)
+              raise SystemExit(1)
+          PY
+
       - name: Upload dtb
         uses: actions/upload-artifact@v4
         with:

@@ -135,6 +135,17 @@ jobs:
             echo "FATAL: sd-uhs-sdr50 still present (system disk must stay 3.3V)"; exit 1
           fi
           echo "gate: dtb patches OK (npu/iommu fail, vop plane-mask, always-on, no-1-8-v)"
+          # HDMI 音频必须是最新 dtb。mclk-fs 不是 128（dtsi 默认 256）或声卡名不是
+          # rockchip,hdmi0 时，固件上板就是「有画面没声音」，而且内核日志零报错。
+          python3 -c "
+          import sys; sys.path.insert(0,'tools'); import dtb_diff as D
+          N,_=D.load('$DTB'); h=N.get('/hdmi-sound') or {}
+          m=h.get('simple-audio-card,mclk-fs')
+          n=(h.get('simple-audio-card,name') or b'').rstrip(b'\x00')
+          assert m==b'\x00\x00\x00\x80', 'mclk-fs=%r, need 128 -- dtb is stale' % (m,)
+          assert n==b'rockchip,hdmi0', 'card name=%r, need rockchip,hdmi0 -- dtb is stale' % (n,)
+          print('gate: HDMI audio OK (mclk-fs=128, name=rockchip,hdmi0)')
+          "
 
           # 同 build-t68m-sd：必须走 make_lite_boot.py。47 条目时单槽只有 172,544 B，
           # 而本版 dtb 是 172,602 B（NPU 三属性 + vop plane-mask），boot-replace 会把
@@ -144,6 +155,13 @@ jobs:
           grep -qE 'headroom (0|[1-9][0-9]*) B' /tmp/lite.txt
           python3 tools/rsce_tool.py boot-list "$D/boot.img" | tee /tmp/list.txt | grep -E 'entries=|rk3568' | head -20
           grep -q 'rev0f\.dtb' /tmp/list.txt || { echo "FATAL: no rev0f slot (board is hwrev 0x0f)"; exit 1; }
+          # 产物级校验：以上只证明输入 dtb 是对的，这里证明它**真的被写进了 boot.img**。
+          # 逐字节查这份 dtb 是否完整出现在产物里，缺一个字节都算没注入。
+          python3 -c "
+          d=open('$D/boot.img','rb').read(); b=open('$DTB','rb').read()
+          assert b in d, 'FATAL: boot.img 里找不到这份 dtb 的字节，注入没生效'
+          print('gate: dtb in boot.img OK (%d B at offset %d)' % (len(b), d.index(b)))
+          "
 
       - name: Serial console on ttyS2 (this board's DTB has no fiq-debugger)
         run: |
