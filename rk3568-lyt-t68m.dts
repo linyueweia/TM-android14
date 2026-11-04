@@ -352,8 +352,29 @@
 	connect = <&vp0_out_hdmi>;
 };
 
+/* HDMI 音频：两个属性都必须显式覆盖，否则「有画面没声音」且不报任何错。
+ *
+ * 1) mclk-fs：dtsi 默认 256，实测 MCLK 会跑成 48000*256 = 12.288 MHz。
+ *    dw-hdmi 的 I2S 输入按 128*fs 采样，倍频选频对不上 → 数据照常进 DMA
+ *    （hw_ptr 在跑、DAPM 也 On），但 HDMI 那头打不出音频包。
+ *    实测改 128 后 clk_summary 的 mclk_i2s0_8ch_tx = 6144000 Hz。
+ *
+ * 2) name：ALSA 用它派生 /proc/asound/cardN/id。RK 的 audio HAL
+ *    (audio.primary.rk30board.so) 里硬编码匹配字符串 "rockchiphdmi0"，
+ *    名字对不上就报 `E modules.primary.audio_hal: invalid card num.`，
+ *    哪怕 AudioPolicy 已经把路由切到 device=0x400(HDMI) 也开不了流。
+ *    写 "HDMI" 时 card id 就是 "HDMI"，HAL 不认。
+ *
+ * 这两条与厂商 R5S dtb 一致（其 hdmi-sound 就是 name="rockchip,hdmi0"、
+ * mclk-fs=<128>）。判据不是"编译过了"，而是：
+ *   cat /proc/asound/card0/id          -> rockchiphdmi0
+ *   grep mclk_i2s0_8ch_tx clk_summary  -> 6144000
+ *   logcat | grep "invalid card num"   -> 无输出
+ */
 &hdmi_sound {
 	status = "okay";
+	simple-audio-card,mclk-fs = <128>;
+	simple-audio-card,name = "rockchip,hdmi0";
 };
 
 &i2c0 {
