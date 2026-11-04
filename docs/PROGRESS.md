@@ -70,9 +70,71 @@
 | 6 | audio_policy 纳入版本控制，解决「刷机即丢」 | 新增 `board-overlay/vendor/etc/`（两份 xml）+ `board-overlay/README.md` 写清推送步骤与三条自检判据 | ✅ |
 | 7 | 重启后音频配置仍在（overlay 是否持久化） | 重启到 `sys.boot_completed=1` 后，两份 xml 的 md5 仍是 `a1fed148…` / `31b7c053…`，与仓库逐字节相同；声卡仍 `rockchiphdmi0`、`defaultOutputDevice` 仍 `HDMI Out` | ✅ |
 | 8 | 记录一条判死禁忌：**别用 `tinyplay` 判断系统有没有声音** | `tinyplay` 直接打 PCM 到声卡、绕开 AudioFlinger，与系统媒体流是两条路 | ❌→✅ |
+| 9 | 发现 CI 的 parity 门禁**管不到板级节点** | `dtb_diff.py --only-ip` 只比 SoC IP；`/hdmi-sound` 是板级节点，改回 256 也全绿 | ✅ |
+| 10 | 补四道 dtb 门禁（编译产物断言 / 与 dist 语义一致 / 注入前校验 / 产物字节校验） | sd 实测 `gate: dtb in boot.img OK (172625 B at offset 49040896)` | ✅ |
+| 11 | 六条流水线全部基于同一提交重跑 | `c320983`：dtb-build、sd、firmware-probe、fetch-images 全绿；usb/eflasher 跑完前关机 | 🟡 |
+| 12 | 抓到门禁自身的 bug：比 `phandle` 误报 | run 41858170120 四个属性全对，却报 `/hdmi-sound differs: ['phandle']` → 排除后 c320983 通过 | ❌→✅ |
 
 **本轮方法论**：音频问题按 **内核时钟 → 声卡名 → 框架路由** 三层走，每层有独立判据，别跳层。
 三个根因是**叠加**的，只修其中一两个都会「看起来改了但没声」，这是它拖了这么久的原因。
+
+---
+
+## 交接（截至 2026-11-04 23:40，机器已关机）
+
+### 现在是什么状态
+
+**这台 T68M 是能用的**：TF 卡启动 → HDMI 出画面 + 出声音 → 点重启能真重启 → SATA 盘 117G 数据完好。
+当前在跑的 dtb 是 `172,625 B / sha256 a2eac6fc…`，与仓库 `dist/rk3568-lyt-t68m-android.dtb` 逐字节相同。
+
+| 已闭环 | 判据 |
+|---|---|
+| 启动 + 重启 | 冷启 162.7 s / 热启 74.0 s，重启后串口重新出 DDR + U-Boot SPL |
+| NPU | `Initialized rknpu 0.9.8`，`failed to get ack` = 0 |
+| SATA 外接盘 | user 0 解锁后 `public:8,1 mounted`，117 G / 已用 4.1 G |
+| HDMI 音频 | 声卡 `rockchiphdmi0`、`mclk-fs=0x80`、route 全 `hdmi(400)`、人耳确认 |
+| 音频配置持久性 | 重启后两份 xml 的 md5 与仓库一致（刷 vendor/恢复出厂才丢） |
+| CI 门禁 | 四道校验，sd 实测产物里逐字节验到 172,625 B 的 dtb |
+
+### 关机时还在跑的两条（**接手先看这里**）
+
+| 流水线 | run id | 怎么看结果 |
+|---|---|---|
+| `build-t68m-usb` | **41859020408** | `gh run view` 或网页 `/actions/runs/41859020408` |
+| `build-t68m-eflasher` | **41859012581** | `/actions/runs/41859012581` |
+
+两条都基于 `c320983`，关机不影响 CI 运行。跑完在 artifact 里取产物（7 天过期）。
+**如果失败了，先看是不是 dtb 门禁拦的** —— 那说明 dtb 有问题，不是流水线坏了。
+
+### 下次开机第一件事
+
+```bash
+# 1) 看 device 还认不认（USB 调试）
+adb devices
+# 2) 音频还在不在 —— 恢复出厂过的话大概率没了
+adb shell cat /proc/asound/card0/id          # 需 rockchiphdmi0
+adb shell "grep -o '<defaultOutputDevice>[^<]*' /vendor/etc/audio_policy_configuration.xml"
+# 3) 不在就补：见 board-overlay/README.md 的四条命令
+```
+
+### 尚未闭环（按优先级）
+
+1. **second 段 headroom = 0 B**（新发现，最该先修）
+   `slot capacity 172625 B, dtb is 172625 B (headroom 0 B)`。dts 再加任何一个属性，
+   注入就会失败或越界。门禁目前**允许 0**，所以不会报错。
+   两条路：减一个 rev 槽腾空间，或给 headroom 设 4 KB 下限后重建布局。
+2. **三个 CI 产物从未冷启动上板** —— 所有"能启动"的结论都来自手工产物。
+3. **USB `update.img` 未实刷**，只离线验过打包 + 门禁。
+4. **audio_policy 没落到 vendor 镜像** —— 重打包 super 风险大，现方案是丢了照文档推一遍。
+5. **第三台板拒绝合法 `RKNS`** —— 原因未定，不编。
+6. A/B `boot_b` 是旧镜像，下次换 boot 时同步刷。
+
+### 改动落在哪
+
+- 仓库 `github.com/linyueweia/TM-android14`，分支 `main`，HEAD = `c320983`，工作区干净
+- 板级修复全在 `rk3568-lyt-t68m.dts` → 编出 `dist/*.dtb` → CI 注入 boot.img
+- 运行时改动只有 audio_policy 两份，在 `board-overlay/`
+- 技能库 `rk-android-board-porting` v1.5.5：§8d（四道门禁）、§11i（HDMI 三层判据）、台账 H13
 
 ---
 
