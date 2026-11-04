@@ -122,3 +122,14 @@ boot-list     16/16 槽 = LYT T68M (172191 B)
 - hwrev 实际探测值（16 槽已铺满，任一号都命中，风险已消除）
 - NPU 在 Android 14 + 6.1 vendor 上是否 `panic_on_set_idle`（fnOS 线会崩，Android 出货板是全 okay）
 - 实机一次都没跑过；下一轮上电看串口第四行是否变成 `ANDROID: Hash OK`
+
+### 2026-11-04 最终产物（commit 2467d33，两条流水线均 success）
+
+```
+build-t68m-sd   #4  rk3568-sd-android14-6.1-arm64-20261104.img.gz
+                    1,092,675,227 B  sha256 c867e950f5af67ec5df48b10d95bdbb44ee634ba13c7ee8c1bf194a24aeb1773
+                    内含：console=ttyS2,1500000 + boot header id MATCH
+build-t68m-usb  #6  update.img  2,378,732,106 B
+                    sha256 c5174c8faa3df1de7752e12eacf6686e99944a2d40373bef9583d7b774b15436
+```
+上电验收按 `docs/boot-verify-checklist.md` 走，第 ③ 行 `ANDROID: Hash OK` 是分水岭。
