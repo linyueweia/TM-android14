@@ -865,8 +865,32 @@
 	status = "okay";
 };
 
+/* ══════════════════════════════════════════════════════════════════
+ * USB3.0 口（fcc00000）固定当 host —— 2026-11 实机定位
+ *
+ * 板上两个 USB 座：
+ *   USB2.0 口 → usb_host0（fd800000/840000），纯 host，独立可用
+ *   USB3.0 口 → usbdrd_dwc3（fcc00000），唯一的 Type-A 3.0 座，
+ *               原厂 dr_mode=otg，同时也是唯一的 adb 调试口
+ *
+ * 为什么原厂配置下这个口永远当不了主机（三条实测证据）：
+ *   1) 拔掉调试线后 extcon0 仍持续报 USB=1 / SDP=1（63 秒采样一次未变），
+ *      而 USB_VBUS_EN=0 —— 说明 VBUS 是硬件直供，PHY 的 BVALID 恒有效，
+ *      dwc3 于是永久停在 device 角色，插任何设备都不枚举。
+ *   2) 运行时 `echo host > /sys/kernel/debug/usb/fcc00000.usb/mode` 后
+ *      1.7 秒即注册 xhci-hcd.7.auto，port01 变 Connected/Enabled/Link:U0，
+ *      接收器 7-1 正常枚举、鼠标可用 —— 硬件与 PHY 通路完好。
+ *   3) 照抄 R5S 加 usb-role-switch / role-switch-default-mode="host" 无效：
+ *      extcon 一直持有 device 请求，默认值根本轮不到生效。
+ *
+ * 结论：该口物理上只有一条角色通道，host 与 device 不能共存。
+ * 本板取舍为「固定 host」（蓝牙鼠标 / U 盘可用），调试改走串口
+ * （COM3 / 1500000 / `su 0` 可提 root）。以太网 adb 暂未打通：eth1 能
+ * link up 1000M、IpClient 在跑，但 `ndc interface setcfg` 被 netd 拒
+ * （400 Failed to set address），Android 14 的 `cmd ethernet` 未实现。
+ * ══════════════════════════════════════════════════════════════════ */
 &usbdrd_dwc3 {
-	extcon = <&usb2phy0>;
+	dr_mode = "host";
 	status = "okay";
 };
 

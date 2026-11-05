@@ -200,10 +200,8 @@ adb shell "grep -o '<defaultOutputDevice>[^<]*' /vendor/etc/audio_policy_configu
 
 ### 尚未闭环（按优先级）
 
-1. **USB3.0 口不认 USB2 设备** —— 插 2.4G 接收器内核**零日志**（不是枚举失败，是压根没有
-   "插入"事件）。DTB 已排除：USB/PHY 21 个节点与原厂 0 差异，改 DTB 不会好。
-   判据是拿 USB3.0 U 盘试一次：认得出 → 该口只引了 SuperSpeed 差分对，全速 12Mbps 的
-   2.4G 接收器物理上不可能工作；也不认 → 供电或连接器本身的问题。
+1. ~~**USB3.0 口不认 USB2 设备**~~ —— **已在 Day 5 闭环**。真因是 OTG 角色锁死 device，
+   与差分对、供电、连接器都无关。本段原先的推断已被实测推翻，**不要再引用**。
 2. **鼠标右键→返回没持久化** —— 现方案是 `getevent` + `input keyevent 4` 的脚本，重启即失效。
    要落到 `/vendor/etc/init/*.rc` 才算真解决（一并考虑 `input` 每次起 Java 进程 ~150 ms 的延迟）。
 3. **三个 CI 产物从未冷启动上板** —— 所有"能启动"的结论都来自手工产物。
@@ -212,6 +210,35 @@ adb shell "grep -o '<defaultOutputDevice>[^<]*' /vendor/etc/audio_policy_configu
 6. **第三台板拒绝合法 `RKNS`** —— 原因未定，不编。头里 `0x90`/`0xe8` 是**明文** SHA256，
    而载荷 RC4 加密，离线不可复算。判据：拔掉 TF 卡冷启动该机，能起 eMMC → BROM 顺序问题；
    起不来 → BROM 拒它。
+
+## Day 5 · 2026-11-05 —— USB3.0 口固定 host（真因是 OTG 角色锁死）
+
+| # | 完成项 | 判据 / 证据 | 状态 |
+|---|---|---|---|
+| 1 | 定位真因：不是 DTB 缺节点，是 **OTG 角色永久锁死 device** | 拔掉调试线后 `extcon0` 仍持续报 `USB=1/SDP=1`，63 秒采样一次未变；同组 `USB_VBUS_EN=0` | ✅ |
+| 2 | 运行时强制切 host，证明硬件通路完好 | `echo host > /sys/kernel/debug/usb/fcc00000.usb/mode` 后 **1.7 s** 注册 `xhci-hcd.7.auto`，`port01 = Powered Connected Enabled Link:U0`，接收器 `7-1` 枚举（鼠标可用） | ✅ |
+| 3 | 试「照抄 R5S」方案并否决 | R5S 的 `fcc00000` 多 `usb-role-switch` / `role-switch-default-mode="host"` / `role-switch-visible`；照抄重启后 **114 条采样全部 `mode=device`**，一次未变 | ❌ |
+| 4 | 最终修复：`dr_mode = "host"` + 删 `extcon` | dist dtb 172,764 → **172,745 B**；995 节点中 994 语义一致，仅 `fcc00000` 两处改动 | ✅ |
+| 5 | 实机冷启动验证 | 串口 1500000：`xhci-hcd.0.auto: irq 42, io mem 0xfcc00000`、`usb 5-1: Product: Wireless Receiver`、`hid-generic … [Telink Wireless Receiver]`；串口查得 `MK:host`、`XH:xhci-hcd.0.auto` | ✅ |
+
+**被推翻的三个判断（留痕）**：
+
+1. Day 4 记的「该口只引了 SuperSpeed 差分对，全速 12 Mbps 接收器物理上不可能工作」——**推翻**。
+   切成 host 后该接收器正常枚举，USB2 差分对是通的，硬件从来没问题。
+2. 「照 R5S 加 role-switch 三属性即可解决」——**推翻**。属性确实注册成功
+   （`/sys/class/usb_role/fcc00000.usb-role-switch` 出现），但 `extcon` 一直持有 device
+   请求，`role-switch-default-mode` 轮不到生效。
+3. 「DTB 的 USB/PHY 节点与原厂 0 差异，改 DTB 不会好」—— 只对了一半：节点集合确实一致，
+   但**角色属性的取值本身就是原厂给错的**（`dr_mode=otg` + `extcon`），所以出路仍在 DTB。
+
+**取舍**：该口物理上只有一条角色通道，host 与 device 不能共存。本板固定 host，
+调试改走串口（`COM3` / 1500000 / `su 0` 有 root shell）。
+
+**未闭环**：
+- **网络 adb 没打通**：eth1 `link up 1000M`、`IpClient` 已在跑，但网线另一端没有 DHCP 服务器；
+  `ndc interface setcfg` 被 netd 拒（`400 Failed to set address`），Android 14 的
+  `cmd ethernet` 未实现（`No shell command implementation`）。
+- 鼠标右键→返回仍未持久化（同 Day 4 第 2 条）。
 
 ### 改动落在哪
 
