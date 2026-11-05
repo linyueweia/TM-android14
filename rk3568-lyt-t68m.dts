@@ -1009,21 +1009,38 @@
 	status = "okay";
 };
 
-/* 对齐厂商 R5S 基线：DFI 是 DDR 调试接口，Android 侧没人用，开着只是多占一个
- * 地址窗口。OpenWrt 的 t68m dts 打开它是为了 devfreq 读 DDR 频率。 */
+/* 下面四段是**有意与原厂 T68M(rev0f) 不同**的项，不是漏配、也不是照抄 R5S。
+ *
+ * 基线说明：这块板在友善固件里的槽位是 rk3568-nanopi5-rev0f.dtb，
+ * compatible = "lyt,t68m"、model = "LYT T68M" —— 它才是本板原厂配置。
+ * 以前这里写成「对齐厂商 R5S 基线」，对的是 nanopi5-rev01（R5S），
+ * 那是另一块板，两版之间 493 项属性不同。现已改用 dist/rk3568-lyt-t68m-vendor.dtb。
+ */
+
+/* DFI = DDR 调试接口，Android 侧没人用，开着只多占一个地址窗口。
+ * 原厂 rev0f 是 okay（它用 devfreq 读 DDR 频率），我们关掉。 */
 &dfi {
 	status = "disabled";
 };
 
-/* 对齐厂商 R5S 基线：硬件加解密引擎（fscrypt / dm-crypt 走它）。
- * rk3568.dtsi 里默认 disabled，本板 dts 没覆盖，导致和 R5S 的 IP 能力矩阵不一致。 */
+/* 硬件加解密引擎（fscrypt / dm-crypt 走它）。rk3568.dtsi 默认 disabled，
+ * 原厂 rev0f 也没有覆盖，等于关闭。我们显式打开：开了才有硬件加速，
+ * 关掉时 fscrypt 走软件实现，功能不受影响但会慢。 */
 &{/crypto@fe380000} {
 	status = "okay";
 };
 
-/* 对齐厂商 R5S 基线：PM 休眠框架。除了 status，本节点其余属性与 R5S 逐字节相同
- * （sleep-mode-config 0x5ec / wakeup-config 0x10 / debug-en 1），PMIC 同为 rk809。 */
+/* PM 休眠框架。原厂 rev0f 是 disabled。我们打开，使其与 PMIC(rk809) 的休眠能力一致。
+ * 注意：这一项与「重启变关机」有关，动它之后必须实测重启。 */
 &{/rockchip-suspend} {
+	status = "okay";
+};
+
+/* power-domain@6（reg = <6>）原厂 rev0f 显式 disabled。
+ * 但本板 VPU/RKVDEC/RKVENC 一组设备节点都是 okay，电源域跟着关掉会让它们
+ * 访问不到寄存器 —— 原厂大概率是不用硬件编解码（走软解）才省的。
+ * 我们显式打开，保留硬解能力。 */
+&{/power-management@fdd90000/power-controller/power-domain@6} {
 	status = "okay";
 };
 

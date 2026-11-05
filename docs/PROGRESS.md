@@ -119,10 +119,12 @@ adb shell "grep -o '<defaultOutputDevice>[^<]*' /vendor/etc/audio_policy_configu
 
 ### 尚未闭环（按优先级）
 
-1. **second 段 headroom = 0 B**（新发现，最该先修）
-   `slot capacity 172625 B, dtb is 172625 B (headroom 0 B)`。dts 再加任何一个属性，
-   注入就会失败或越界。门禁目前**允许 0**，所以不会报错。
-   两条路：减一个 rev 槽腾空间，或给 headroom 设 4 KB 下限后重建布局。
+1. ~~second 段 headroom = 0 B~~ —— **2026-11-05 已确认是误报，不是隐患**
+   `build_rcs` 把每个槽的 size 设成 dtb 的实际长度、再按 512 重排，所以
+   `max(size) - len(dtb)` 恒等于 0。dtb 变大时所有槽一起变大，second 段整体重排，
+   不存在"加一个属性就溢出"。`make_lite_boot.py` 的打印已改成
+   `16 board slot(s), 172625 B each (= dtb size)`，三条构建里那条 `headroom (0|...)`
+   的 grep 也一并换掉 —— 它原本会因为这条假告警而放行真正的错误。
 2. **三个 CI 产物从未冷启动上板** —— 所有"能启动"的结论都来自手工产物。
 3. **USB `update.img` 未实刷**，只离线验过打包 + 门禁。
 4. **audio_policy 没落到 vendor 镜像** —— 重打包 super 风险大，现方案是丢了照文档推一遍。

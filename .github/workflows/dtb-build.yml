@@ -102,9 +102,9 @@ jobs:
             file "$D"
             dtc -I dtb -O dts "$D" 2>/dev/null | head -40
             echo '```'
-            echo "## SoC IP enable matrix (board vs vendor rk3568-nanopi5-rev01)"
+            echo "## SoC IP enable matrix (board vs vendor LYT T68M rev0f)"
             echo '```'
-            python3 tools/dtb_features.py "$D" --base dist/rk3568-nanopi5-rev01-base.dtb
+            python3 tools/dtb_features.py "$D" --base dist/rk3568-lyt-t68m-vendor.dtb
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -116,11 +116,15 @@ jobs:
           set -euo pipefail
           D=sdk/kernel-6.1/arch/arm64/boot/dts/rockchip/rk3568-lyt-t68m.dtb
           test -s "$D" || { echo "FATAL: dtb 不存在，上一构建步骤其实失败了"; exit 1; }
-          python3 tools/dtb_features.py "$D" --base dist/rk3568-nanopi5-rev01-base.dtb             | grep -E '^(NPU|GPU|VPU-dec|VPU-enc|RGA|OP-TEE|CMA) ' | tee /tmp/features.txt
+          python3 tools/dtb_features.py "$D" --base dist/rk3568-lyt-t68m-vendor.dtb             | grep -E '^(NPU|GPU|VPU-dec|VPU-enc|RGA|OP-TEE|CMA) ' | tee /tmp/features.txt
           grep -q 'NPU .*<<< DIFF' /tmp/features.txt && { echo "NPU still disabled"; exit 1; } || true
           grep -q 'GPU .*<<< DIFF' /tmp/features.txt && { echo "GPU disabled"; exit 1; } || true
           grep -q 'VPU-dec .*<<< DIFF' /tmp/features.txt && { echo "VPU-dec disabled"; exit 1; } || true
-          # 三个 IP 级开关必须和 R5S 基线一致（crypto / dfi / 休眠框架）
+          # 这三项与基线（LYT T68M 原厂 rev0f）是有意不同的，只打印不断言：
+          #   dfi    原厂 okay / 我们 disabled（Android 不用 DDR 调试口）
+          #   crypto 原厂 disabled / 我们 okay（要硬件加解密）
+          #   suspend 原厂 disabled / 我们 okay（休眠框架）
+          # 断言它们相等反而是错的 —— 这条只在日志里留证据，改动时人工确认。
           # 不要在这里用 heredoc：块标量里结束符若顶格会直接把 YAML 截断
           # （2026-11-04 踩过，workflow 变成 "does not have workflow_dispatch trigger"）。
           for n in crypto@fe380000 dfi@fe230000 rockchip-suspend; do

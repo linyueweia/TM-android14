@@ -190,9 +190,13 @@ def main():
     open(a.out, "wb").write(out)
     print("OK %s  %d B  entries=%d  second=%d  id=%s" %
           (a.out, len(out), len(chk), len(new_second), digest[:16]))
-    print("   slot capacity now %d B, dtb is %d B (headroom %d B)" %
-          (max(e["size"] for e in chk if "rk3568" in e["name"]), len(dtb),
-           max(e["size"] for e in chk if "rk3568" in e["name"]) - len(dtb)))
+    # 这里以前打印 "slot capacity / headroom"。那是误报：build_rcs 把每个槽的 size
+    # 设成 dtb 的实际长度再按 512 排布，所以 max(size) - len(dtb) 恒为 0，并不是
+    # "零余量、加一个属性就溢出"。dtb 变大时所有槽一起变大，second 段整体重排。
+    # 真正需要盯的是 boot 分区能否装下整个 boot.img，那是打包侧的事。
+    board = [e for e in chk if "rk3568" in e["name"]]
+    print("   %d board slot(s), %d B each (= dtb size); second segment %d B" %
+          (len(board), max(e["size"] for e in board), len(new_second)))
 
 
 if __name__ == "__main__":

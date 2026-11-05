@@ -113,8 +113,8 @@ jobs:
           set -eux
           D=sd-fuse/android14
           DTB="${{ github.event.inputs.dtb }}"
-          python3 tools/dtb_features.py "$DTB" --base dist/rk3568-nanopi5-rev01-base.dtb | tee /tmp/feat.txt
-          # NPU stays ENABLED, same as FriendlyElec's own R5S image. The 7.6 s panic
+          python3 tools/dtb_features.py "$DTB" --base dist/rk3568-lyt-t68m-vendor.dtb | tee /tmp/feat.txt
+          # NPU stays ENABLED, same as the vendor image for this board (LYT T68M rev0f). The 7.6 s panic
           # ("failed to get ack on domain 'npu'") was never a reason to disable it: this DTS
           # was missing vdd_npu(DCDC_REG4) regulator-always-on / -boot-on / -init-microvolt,
           # which the R5S baseline dtb has, so the NPU domain was unpowered when its iommu
@@ -122,10 +122,10 @@ jobs:
           npu_row=$(grep -E '^NPU[[:space:]]' /tmp/feat.txt || true)
           echo "gate: $npu_row"
           case "$npu_row" in
-            *fail*) echo "FATAL: NPU must stay enabled (R5S parity); if it panics with"
+            *fail*) echo "FATAL: NPU must stay enabled (vendor parity); if it panics with"
                     echo "       'failed to get ack on domain npu', vdd_npu lost always-on"
                     exit 1 ;;
-            *) echo "OK: NPU enabled, matching R5S" ;;
+            *) echo "OK: NPU enabled, matching vendor (LYT T68M rev0f)" ;;
           esac
           # Patches that are only visible in the dtb bytes, not in the feature matrix.
           for s in 'rockchip,plane-mask' 'rockchip,primary-plane' 'regulator-always-on' 'no-1-8-v'; do
@@ -152,7 +152,9 @@ jobs:
           # 第 19 个槽的开头踩掉。
           python3 tools/make_lite_boot.py "$D/boot.orig.img" "$DTB" "$D/boot.img" | tee /tmp/lite.txt
           grep -q 'entries=18' /tmp/lite.txt
-          grep -qE 'headroom (0|[1-9][0-9]*) B' /tmp/lite.txt
+          # 槽 size 恒等于 dtb 大小（build_rcs 按实际长度重排），没有固定容量可言，
+          # 所以这里只校验布局真的算出来了，不再断言 headroom。
+          grep -qE 'board slot\(s\), [0-9]+ B each' /tmp/lite.txt
           python3 tools/rsce_tool.py boot-list "$D/boot.img" | tee /tmp/list.txt | grep -E 'entries=|rk3568' | head -20
           grep -q 'rev0f\.dtb' /tmp/list.txt || { echo "FATAL: no rev0f slot (board is hwrev 0x0f)"; exit 1; }
           # 产物级校验：以上只证明输入 dtb 是对的，这里证明它**真的被写进了 boot.img**。

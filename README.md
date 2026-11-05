@@ -13,9 +13,10 @@ LYT T68M（RK3568）适配 Android 14，基线 = 友善电子 rk35xx-android14 S
 | 路径 | 是什么 |
 |---|---|
 | `rk3568-lyt-t68m.dts` | **板级 DTS 源文件**，移植的全部成果都在这（NPU 供电、SDIO、combphy、HDMI 音频…）。CI 编译的就是这份 |
-| `dist/rk3568-lyt-t68m-android.dtb` | 上面那份编出来的成品，172,625 B。**当前机器上跑的就是它**，`dtb-build` 流水线会校验两者 0 IP 差异 |
-| `dist/rk3568-lyt-t68m-sdk.dtb` | 友善 SDK 原版 dtb，对照基线（改之前长什么样） |
-| `dist/rk3568-nanopi5-rev01-base.dtb` | R5S 出货板 dtb，做 IP 对齐核查的参照物（`dtb_diff.py --only-ip`） |
+| `dist/rk3568-lyt-t68m-android.dtb` | 上面那份编出来的成品，172,625 B。**当前机器上跑的就是它** |
+| `dist/rk3568-lyt-t68m-vendor.dtb` | **本板原厂 dtb**，从 `boot_a.img` 的 `rk3568-nanopi5-rev0f` 槽提取，`compatible = "lyt,t68m"`、`model = "LYT T68M"`。**所有 CI 的对比基线都是它** |
+| `dist/rk3568-lyt-t68m-sdk.dtb` | 友善 SDK 编译出的原版 dtb（改之前长什么样） |
+| `dist/rk3568-nanopi5-rev01-base.dtb` | R5S（nanopi5-rev01）出货 dtb。**不是本板基线**——那是另一块板，两版 493 项属性不同。仅作 SoC IP 能力的旁证 |
 | `tools/` | 移植工具链 18 个脚本：修 boot 头 SHA1、拆装 second 段、编辑 dtb、打包镜像。按症状查见 [`tools/README.md`](tools/README.md) |
 | `board-overlay/` | 刷机后要手工补的运行时改动（audio_policy 两份），见 [`board-overlay/README.md`](board-overlay/README.md) |
 | `docs/` | 进度表、上板 runbook、验收清单 |
