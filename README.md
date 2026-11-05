@@ -31,18 +31,18 @@ GitHub Actions（ubuntu-latest，全部 `workflow_dispatch` 手动触发）：
 | `firmware-probe.yml` | 判据先行：runner 磁盘余量、友善 CDN 可达性、包体积 | 探测报告 |
 | `fetch-images.yml` | 拉取并缓存友善 Android 14 分区包 | 分区包 |
 | `dtb-build.yml` | 由 DTS 源码编译 DTB，并与 `dist/` 做 **0 IP 差异** 回归 | `t68m-dtb` |
-| `build-t68m-sd.yml` | TF 卡启动镜像（sd-fuse） | `t68m-android14-sd` |
-| `build-t68m-eflasher.yml` | eMMC 烧写镜像（sd-fuse eflasher） | `t68m-android14-eflasher` |
-| `build-t68m-usb.yml` | Maskrom/RKDevTool 线刷包（RKAF 容器） | `t68m-android14-usb` |
+| `build-t68m-sd.yml` | TF 卡启动镜像（sd-fuse） | `T68M-Android14-sd` |
+| `build-t68m-eflasher.yml` | eMMC 烧写镜像（sd-fuse eflasher） | `T68M-Android14-eflasher` |
+| `build-t68m-usb.yml` | Maskrom/RKDevTool 线刷包（RKAF 容器） | `T68M-Android14-usb` |
 
 ### 产物怎么下、多大
 
 | 产物 | 内容 | 大小 | 用之前 |
 |---|---|---|---|
-| `t68m-android14-usb` | `update.img.zst`（默认只出这个） | **815 MB**（原始 2.21 GB，压到 36.0%） | 先 `zstd -d update.img.zst`，Windows 用 7-Zip ≥ 24 |
+| `T68M-Android14-usb` | `T68M-Android14-update.img.zip`（默认只出这个） | **约 950 MB**（原始 2.21 GB，deflate 到 ~40%） | 右键解压出 `update.img`，任何解压工具都行 |
 | ↑ 同上，`with_partitions=true` | 另加 `partitions.zip` | +1.03 GB | 分区烧写兜底时才要，平时别勾 |
-| `t68m-android14-sd` | `*.img.gz` + `SHA256SUMS` | 已 gzip | 先 `gunzip` 再 `dd` / balenaEtcher |
-| `t68m-android14-eflasher` | `*.img.gz` + `SHA256SUMS` | 已 gzip | 同上 |
+| `T68M-Android14-sd` | `T68M-Android14-sd.img.gz` + `SHA256SUMS` | 已 gzip | 先 `gunzip` 再 `dd` / balenaEtcher |
+| `T68M-Android14-eflasher` | `T68M-Android14-eflasher.img.gz` + `SHA256SUMS` | 已 gzip | 同上 |
 | `t68m-dtb` | 编译出的板级 DTB | 约 40 KB | 直接比对/注入 |
 
 实测对比（同一份产物，2026-11-04）：
@@ -53,8 +53,11 @@ GitHub Actions（ubuntu-latest，全部 `workflow_dispatch` 手动触发）：
 再收一步  815 MB    分区包改为 with_partitions 才产出（默认不出，内容与 update.img 重复）
 ```
 
-> **线刷包压缩**：`update.img` 是 RKAF 裸容器，分区按扇区原样拼接、含大量零填充。
-> 流水线用 `zstd -19` 压一遍再上传（artifact 本身 `compression-level: 0`，因为已是压缩包）；
+> **线刷包压缩用 zip，不用 zstd**：`update.img` 是 RKAF 裸容器，分区按扇区原样拼接、含大量零填充。
+> `zstd -19` 压到 36.0%（815 MB）、`deflate -9` 实测 40.1%（约 950 MB），**两者都远低于 GitHub Release
+> 的 2 GiB 单文件上限** —— 既然体积都不是问题，就选「对方能打开」的那个：Windows 资源管理器、
+> 7-Zip 任意版本、WinRAR 都认 zip，而 `.zst` 要 7-Zip ≥ 24 或另装 `zstd.exe`（实际就卡在打不开）。
+> 代价 135 MB，换来零门槛解压。
 > 以前的 4.3 GB 里有一半是同一个 `update.img` 被重复打进了 partitions.zip，已排除。
 > dispatch 时填 `release_tag`（如 `v1.0.0`）可同时发布到 Release，避免 7 天 artifact 过期后重下。
 

@@ -33,6 +33,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 240
+    env:
+      # 产物命名 = 设备名 + 安卓版本，三条线统一前缀
+      PKG: T68M-Android14
     steps:
       - uses: actions/checkout@v4
 
@@ -229,9 +232,10 @@ jobs:
           set -eux
           cd sd-fuse
           IMG=$(ls out/*.img | head -1)
-          pigz -6 -p "$(nproc)" -c "$IMG" > "out/$(basename "$IMG").gz"
+          OUT="out/$PKG-sd.img.gz"
+          pigz -6 -p "$(nproc)" -c "$IMG" > "$OUT"
           ls -l out/
-          sha256sum "out/$(basename "$IMG").gz" | tee out/SHA256SUMS
+          ( cd out && sha256sum "$(basename "$OUT")" | tee SHA256SUMS )
 
       - name: Evidence
         if: always()
@@ -251,7 +255,7 @@ jobs:
       - name: Upload image
         uses: actions/upload-artifact@v4
         with:
-          name: t68m-android14-sd
+          name: ${{ env.PKG }}-sd
           path: |
             sd-fuse/out/*.gz
             sd-fuse/out/SHA256SUMS

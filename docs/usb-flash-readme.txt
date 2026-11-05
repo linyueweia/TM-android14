@@ -1,10 +1,10 @@
 T68M (LYT RK3568) Android 14 —— USB 线刷包
 
-【先解压】update.img.zst -> update.img
-  下载到的是 update.img.zst（zstd 压缩，约 3 倍，2.4 GB 原文件压到 ~700 MB~1 GB）。
-  Linux/macOS : zstd -d update.img.zst          （没装就先 apt install zstd / brew install zstd）
-  Windows     : 用 7-Zip 24.0+ 右键「解压」，或装 zstd 后 zstd -d update.img.zst
-  校验        : sha256sum -c update.img.zst.sha256   （Windows: certutil -hashfile update.img.zst SHA256）
+【先解压】T68M-Android14-update.img.zip -> update.img
+  下载到的是 T68M-Android14-update.img.zip（普通 zip，2,372,776,522 B 压到约 950 MB）。
+  Windows     : 右键「全部解压缩」（系统自带即可），或 7-Zip / WinRAR 任意版本
+  Linux/macOS : unzip update.img.zip
+  校验        : sha256sum -c T68M-Android14-update.img.zip.sha256   （Windows: certutil -hashfile <包名> SHA256）
   解压出来的文件名必须还原成 update.img，RKDevTool 只认这个扩展名。
 
 【方式一】RKDevTool 刷 update.img（推荐）

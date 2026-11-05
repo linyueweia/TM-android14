@@ -33,6 +33,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 240
+    env:
+      # 产物命名 = 设备名 + 安卓版本，三条线统一前缀
+      PKG: T68M-Android14
     steps:
       - uses: actions/checkout@v4
 
@@ -213,9 +216,10 @@ jobs:
           IMG=$(ls out/*eflasher*android14*.img 2>/dev/null | head -1)
           [ -n "$IMG" ] || IMG=$(ls out/*.img | head -1)
           echo "packing $IMG"
-          pigz -6 -p "$(nproc)" -c "$IMG" > "out/$(basename "$IMG").gz"
-          ls -l out/*.gz
-          sha256sum out/*.gz | tee out/SHA256SUMS
+          OUT="out/$PKG-eflasher.img.gz"
+          pigz -6 -p "$(nproc)" -c "$IMG" > "$OUT"
+          ls -l "$OUT"
+          ( cd out && sha256sum "$(basename "$OUT")" | tee SHA256SUMS )
 
       - name: Evidence
         if: always()
@@ -236,7 +240,7 @@ jobs:
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: t68m-android14-eflasher
+          name: ${{ env.PKG }}-eflasher
           path: |
             sd-fuse/out/*.gz
             sd-fuse/out/SHA256SUMS
