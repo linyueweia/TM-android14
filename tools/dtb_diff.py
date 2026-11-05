@@ -30,7 +30,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fdt_edit as F  # noqa: E402
 
 REF_PROPS = (
-    "-supply", "iommus", "remote-endpoint", "clocks", "power-domains",
+    "-supply", "iommus", "remote-endpoint", "clocks", "clock-parents",
+    "power-domains",
     "resets", "dmas", "phys", "phy-handle", "sound-dai", "memory-region",
     "nvmem-cells", "io-channels", "mboxes", "rockchip,srv", "rockchip,sram",
     "rockchip,grf", "rockchip,pmu", "-gpios", "-gpio",
