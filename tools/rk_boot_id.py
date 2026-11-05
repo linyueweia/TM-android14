@@ -209,9 +209,13 @@ def main():
         print("wrote %s: size %d unchanged, %d byte(s) changed" % (dst, len(back), changed))
         if again != hb["id"][:ID_LEN]:
             raise SystemExit("READ-BACK FAILED: recomputed digest != stored id")
-        if changed != ID_LEN:
-            raise SystemExit("READ-BACK FAILED: expected exactly %d changed bytes, got %d"
-                             % (ID_LEN, changed))
+        # 用「读回文件的 digest == 写入的 id」判对错，不能用「必须改 20 字节」：
+        # 新 SHA1 与原来的占位值（0x11223344…）完全可能有个别字节相同，
+        # 实测就出现过 19/20 —— 那不是写坏，只是那一字节本来就不需要变。
+        # 真正异常的是「一个字节都没变」（说明写到了别处）或改到了 id 之外。
+        if not 0 < changed <= ID_LEN:
+            raise SystemExit("READ-BACK FAILED: %d byte(s) changed, expect 1..%d"
+                             % (changed, ID_LEN))
         print("MATCH (verified by re-reading the written file)")
         return 0
 
