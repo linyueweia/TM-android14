@@ -191,6 +191,39 @@ jobs:
               raise SystemExit(1)
           PY
 
+      # 板级节点既不在 --only-ip 的 IP_KEYS（里面没有 usb）里，也不在 feature
+      # matrix 里。USB3.0 口从 otg 改回 host 这件事，改错了 CI 照样全绿，固件上板
+      # 就是「USB3.0 口插鼠标没反应」—— 必须单独断言，且源码产物与 dist 两份都查。
+      - name: Assert board-level fixes (USB3.0 host / VOP supply)
+        run: |
+          set -euo pipefail
+          D=sdk/kernel-6.1/arch/arm64/boot/dts/rockchip/rk3568-lyt-t68m.dtb
+          test -s "$D" || { echo "FATAL: dtb 不存在"; exit 1; }
+          python3 tools/assert_board_dtb.py "$D" dist/rk3568-lyt-t68m-android.dtb
+          # 源码产物与 dist 在这三个板级节点上也必须语义一致（phandle 除外）。
+          python3 - "$D" <<'PY'
+          import sys
+          sys.path.insert(0, 'tools')
+          import dtb_diff as D
+          built, _ = D.load(sys.argv[1])
+          ref, _ = D.load('dist/rk3568-lyt-t68m-android.dtb')
+          IGN = {'phandle', 'linux,phandle'}
+          bad = []
+          for p in ('/usbdrd/usb@fcc00000', '/hdmi-sound', '/vop@fe040000'):
+              a, b = built.get(p) or {}, ref.get(p) or {}
+              if not a or not b:
+                  bad.append('%s 在某一份里缺失 (built=%s, dist=%s)' % (p, bool(a), bool(b)))
+                  continue
+              dd = {k for k in set(a) | set(b) if k not in IGN and a.get(k) != b.get(k)}
+              print('%-24s %s' % (p, 'identical' if not dd else 'DIFF %s' % sorted(dd)))
+              if dd:
+                  bad.append('%s differs from dist: %s' % (p, sorted(dd)))
+          if bad:
+              print('FATAL: 源码编译产物与 dist 漂移 —— 固件里装的就不是实机验证过的那份')
+              for b in bad: print('  -', b)
+              raise SystemExit(1)
+          PY
+
       - name: Upload dtb
         uses: actions/upload-artifact@v4
         with:

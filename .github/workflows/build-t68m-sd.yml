@@ -145,6 +145,9 @@ jobs:
             echo "FATAL: sd-uhs-sdr50 still present (system disk must stay 3.3V)"; exit 1
           fi
           echo "gate: dtb patches OK (npu/iommu fail, vop plane-mask, always-on, no-1-8-v)"
+          # 板级属性（HDMI 音频 / USB3.0 host / VOP 供电）不在 --only-ip 与 feature
+          # matrix 的检查面内，且出错时内核零报错、只有用起来才发现。统一走这个脚本。
+          python3 tools/assert_board_dtb.py "$DTB"
           # HDMI 音频必须是最新 dtb。mclk-fs 不是 128（dtsi 默认 256）或声卡名不是
           # rockchip,hdmi0 时，固件上板就是「有画面没声音」，而且内核日志零报错。
           python3 -c "
