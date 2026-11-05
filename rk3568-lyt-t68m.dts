@@ -913,6 +913,12 @@
 &vop {
 	assigned-clocks = <&cru DCLK_VOP0>, <&cru DCLK_VOP1>;
 	assigned-clock-parents = <&pmucru PLL_HPLL>, <&cru PLL_VPLL>;
+	/* 原厂 rev0f 有这两条，从 SDK 版继承过来时丢了。缺 vop-supply 的后果是
+	   内核打 "rockchip-vop2 fe040000.vop: error -ENODEV: _opp_set_regulators:
+	   no regulator (vop) found" → VOP 的 OPP 表设不起来 → 按频率调压失效，
+	   高分/高刷时可能花屏或掉帧。vop-supply 指 DCDC_REG1 即 vdd_logic。 */
+	vop-supply = <&vdd_logic>;
+	support-multi-area;
 	status = "okay";
 
 	/* vop2 的每个 port 必须显式声明 plane 绑定。

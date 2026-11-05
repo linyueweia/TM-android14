@@ -2,5 +2,15 @@
 *.sh text eol=lf
 *.py text eol=lf
 *.xml text eol=lf
+# workflow 跑在 GitHub 的 Linux runner 上；CRLF 的 YAML 虽能解析，但 diff 噪音大
+*.yml text eol=lf
+*.yaml text eol=lf
+# 文档统一 LF，避免 Windows 侧每次编辑都变成整文件改动
+*.md text eol=lf
+*.txt text eol=lf
+# 二进制产物：不做换行转换，也不在 diff 里展开
 *.dtb binary
 *.img binary
+*.gz binary
+*.zip binary
+*.tgz binary
