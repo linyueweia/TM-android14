@@ -200,13 +200,16 @@ jobs:
           D=sdk/kernel-6.1/arch/arm64/boot/dts/rockchip/rk3568-lyt-t68m.dtb
           test -s "$D" || { echo "FATAL: dtb 不存在"; exit 1; }
           python3 tools/assert_board_dtb.py "$D" dist/rk3568-lyt-t68m-android.dtb
-          # 源码产物与 dist 在这三个板级节点上也必须语义一致（phandle 除外）。
+          # 源码产物与 dist 在这三个板级节点上也必须语义一致。
+          # 不能用原始字节比：assigned-clock-parents / iommus / vop-supply 这些
+          # 引用属性的值是 phandle 编号，编译时自动分配、两棵树必然不同（#23 就是
+          # 这么误报的）。必须走 dtb_diff.norm() 把编号解析成目标节点路径。
           python3 - "$D" <<'PY'
           import sys
           sys.path.insert(0, 'tools')
           import dtb_diff as D
-          built, _ = D.load(sys.argv[1])
-          ref, _ = D.load('dist/rk3568-lyt-t68m-android.dtb')
+          built, bp = D.load(sys.argv[1])
+          ref, rp = D.load('dist/rk3568-lyt-t68m-android.dtb')
           IGN = {'phandle', 'linux,phandle'}
           bad = []
           for p in ('/usbdrd/usb@fcc00000', '/hdmi-sound', '/vop@fe040000'):
@@ -214,10 +217,14 @@ jobs:
               if not a or not b:
                   bad.append('%s 在某一份里缺失 (built=%s, dist=%s)' % (p, bool(a), bool(b)))
                   continue
-              dd = {k for k in set(a) | set(b) if k not in IGN and a.get(k) != b.get(k)}
-              print('%-24s %s' % (p, 'identical' if not dd else 'DIFF %s' % sorted(dd)))
+              ka, kb = set(a) - IGN, set(b) - IGN
+              if ka != kb:
+                  bad.append('%s 属性集合不同: %s' % (p, sorted(ka ^ kb)))
+                  continue
+              dd = [k for k in sorted(ka) if D.norm(k, a[k], bp) != D.norm(k, b[k], rp)]
+              print('%-24s %s' % (p, 'identical' if not dd else 'DIFF %s' % dd))
               if dd:
-                  bad.append('%s differs from dist: %s' % (p, sorted(dd)))
+                  bad.append('%s differs from dist: %s' % (p, dd))
           if bad:
               print('FATAL: 源码编译产物与 dist 漂移 —— 固件里装的就不是实机验证过的那份')
               for b in bad: print('  -', b)
