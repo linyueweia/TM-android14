@@ -80,12 +80,90 @@
 
 ---
 
-## 交接（截至 2026-11-04 23:40，机器已关机）
+## Day 4 · 2026-11-05 —— DTB 对齐到「这块板自己」
+
+### 起因
+
+USB3.0 口插 2.4G 接收器毫无反应（内核零日志），怀疑当初 DTB 对齐没做干净。
+查下来怀疑只对了一半，但翻出一个更根本的问题。
+
+### 关键事实
+
+`boot.img` 的 second 段里有 47 个 dtb，这块板的槽位是 **`rk3568-nanopi5-rev0f.dtb`**，
+`compatible = "lyt,t68m"`、`model = "LYT T68M"` —— **它才是本板原厂配置**，一直躺在固件里。
+
+而 2026-11-04 的 `9a8ff0e「与 R5S 厂商 DTB 做 IP 对齐」` 拿的是 `nanopi5-rev01`，
+那是 `FriendlyElec` 的 R5S，**另一块板**，两版之间 **493 项属性不同**。
+
+| 节点 | 原厂 T68M(rev0f) | R5S(rev01) | 我们当时 |
+|---|---|---|---|
+| `/dfi@fe230000` | okay | disabled | disabled |
+| `/crypto@fe380000` | disabled | okay | okay |
+| `/rockchip-suspend` | disabled | okay | okay |
+| `power-domain@6` | disabled | 无 status | 无 status |
+
+### 但 USB 不是这个原因
+
+对原厂 rev0f 与运行中的 dtb 做 **USB/PHY 21 个节点全量对比：0 差异**。
+控制器 `phys` 指针、`usb2-phy@fe8a0000/host-port` 的 `status`、`phy-supply`、
+USB3 combphy 全一样。**USB 段从 SDK 继承，一个字没改，改 DTB 也不会好。**
+
+### 真正修掉的
+
+| # | 项 | 判据 |
+|---|---|---|
+| 1 | 基线换成 `dist/rk3568-lyt-t68m-vendor.dtb`（从 boot 提取的原厂），4 条流水线 `--base` 全改 | `dtb_features` 里 `SD-card disabled <<< DIFF` 假告警消失 |
+| 2 | 四项偏差改成**显式声明 + 注释为什么与原厂不同**，不再靠默认值 | 编译产物 status 与意图一致 |
+| 3 | `headroom 0 B` 确认是**误报**：槽 size 恒等于 dtb 大小，`max-len` 必然 0 | 打印改成 `16 board slot(s), 172764 B each`，三条构建的 grep 同步换 |
+| 4 | **补回 `vop-supply` + `support-multi-area`**（原厂有、我们缺，真 bug） | 见下 |
+| 5 | boot_a **和** boot_b 都刷同一镜像，A/B 对等 | 两槽 sha256 都是 `91a0ea9f` |
+
+### VOP 那条是真 bug
+
+```
+before: rockchip-vop2 fe040000.vop: error -ENODEV: _opp_set_regulators: no regulator (vop) found
+        rockchip-vop2 fe040000.vop: failed to init opp info
+after : vop2_bind 正常，bin=0 leakage=62 leakage-volt-sel=0
+```
+
+`vop-supply` 指向 `DCDC_REG1`（`vdd_logic`，0.75–1.35 V）。缺它 → OPP 表设不起来 →
+按频率调压失效，高分/高刷时可能花屏掉帧。这一条是从 SDK 版继承时丢的，跟 R5S 无关。
+
+### 不是问题的三条（已核实原厂同样报，别浪费时间）
+
+- `rockchip-snps-pcie3-phy fe8c0000: failed to find rockchip,pipe_grf regmap`
+  —— `/phy@fe8c0000` 两边属性逐项一致，驱动找的属性名与 dtsi 不符
+- `clk: failed to reparent i2s1_mclkout_tx ... -22` —— `&i2s1_8ch` 只加了 `trcm-sync-tx-only`
+- `mali fde60000.gpu: no DT entry: mali-simple-power-model.*`
+  —— `/gpu@fde60000/power-model` 这个节点**三份 dtb（T68M 原厂 / R5S / 我们）属性逐项一致**，
+  `compatible` 都是 `simple-power-model`，而 DDK g25p0 找的是 `arm,mali-simple-power-model`。
+  名字对不上是 dtsi 与驱动版本的错配，**R5S 同样会报**。驱动随后自己 fallback：
+  `Using configured power model mali-g52_r1-power-model`，GPU 功能不受影响，只是功耗估算用内置表。
+
+### 实机验收（重启后）
+
+| 项 | 结果 |
+|---|---|
+| 启动 | `sys.boot_completed=1`，`bootreason=reboot,shell`（真重启） |
+| 运行树 vs dist | 只差 6 个运行时动态节点（serial / bootargs / MAC / memory / sdhci） |
+| 音频 | `card0=rockchiphdmi0`、`defaultOutputDevice=HDMI Out`、12 条 `hdmi(` 路由 |
+| VOP | OPP 生效，`failed to init opp info` 消失 |
+| A/B | boot_a / boot_b sha256 一致 |
+
+### CI
+
+`dtb-build` 通过，输出 `dist parity OK (0 IP diff)`：源码编出的 dtb（172,565 B）与刷进机器的
+（172,764 B）字节不同，但语义完全一致 —— 差异来自手工 `fdt_edit` 与 `dtc` 的字符串表排布。
+
+---
+
+## 交接（截至 2026-11-05 13:00，机器在线）
 
 ### 现在是什么状态
 
 **这台 T68M 是能用的**：TF 卡启动 → HDMI 出画面 + 出声音 → 点重启能真重启 → SATA 盘 117G 数据完好。
-当前在跑的 dtb 是 `172,625 B / sha256 a2eac6fc…`，与仓库 `dist/rk3568-lyt-t68m-android.dtb` 逐字节相同。
+当前在跑的 dtb 是 `172,764 B / sha256 5347ff36…`，与仓库 `dist/rk3568-lyt-t68m-android.dtb`
+语义一致（`/sys/firmware/fdt` 只差 6 个运行时动态节点）。A/B 两槽同一镜像（`sha256 91a0ea9f…`）。
 
 | 已闭环 | 判据 |
 |---|---|
@@ -94,22 +172,25 @@
 | SATA 外接盘 | user 0 解锁后 `public:8,1 mounted`，117 G / 已用 4.1 G |
 | HDMI 音频 | 声卡 `rockchiphdmi0`、`mclk-fs=0x80`、route 全 `hdmi(400)`、人耳确认 |
 | 音频配置持久性 | 重启后两份 xml 的 md5 与仓库一致（刷 vendor/恢复出厂才丢） |
-| CI 门禁 | 四道校验，sd 实测产物里逐字节验到 172,625 B 的 dtb |
+| DTB 基线 | 换成 `dist/rk3568-lyt-t68m-vendor.dtb`（本板原厂 rev0f），四条流水线 `--base` 全改 |
+| VOP OPP | 补回 `vop-supply` 后 `failed to init opp info` 消失，改为 `bin=0 leakage=62` |
+| A/B 对等 | boot_a / boot_b 同一镜像，两槽回读 sha256 相同 |
+| CI 门禁 | `dtb-build` 输出 `dist parity OK (0 IP diff)` |
 
-### 关机时还在跑的两条（**接手先看这里**）
+### 在跑的三条（2026-11-05 12:46 触发，基于 `0ec44e1`）
 
-| 流水线 | run id | 怎么看结果 |
-|---|---|---|
-| `build-t68m-usb` | **41859020408** | `gh run view` 或网页 `/actions/runs/41859020408` |
-| `build-t68m-eflasher` | **41859012581** | `/actions/runs/41859012581` |
+| 流水线 | run id |
+|---|---|
+| `build-t68m-sd` | **41969792044** |
+| `build-t68m-usb` | **41969795647** |
+| `build-t68m-eflasher` | **41969799453** |
 
-两条都基于 `c320983`，关机不影响 CI 运行。跑完在 artifact 里取产物（7 天过期）。
 **如果失败了，先看是不是 dtb 门禁拦的** —— 那说明 dtb 有问题，不是流水线坏了。
 
 ### 下次开机第一件事
 
 ```bash
-# 1) 看 device 还认不认（USB 调试）
+# 1) 看 device 还认不认。**必须插 OTG 口**，两个 USB2.0 口是纯 host，插了 adb 会断
 adb devices
 # 2) 音频还在不在 —— 恢复出厂过的话大概率没了
 adb shell cat /proc/asound/card0/id          # 需 rockchiphdmi0
@@ -119,36 +200,25 @@ adb shell "grep -o '<defaultOutputDevice>[^<]*' /vendor/etc/audio_policy_configu
 
 ### 尚未闭环（按优先级）
 
-1. ~~second 段 headroom = 0 B~~ —— **2026-11-05 已确认是误报，不是隐患**
-   `build_rcs` 把每个槽的 size 设成 dtb 的实际长度、再按 512 重排，所以
-   `max(size) - len(dtb)` 恒等于 0。dtb 变大时所有槽一起变大，second 段整体重排，
-   不存在"加一个属性就溢出"。`make_lite_boot.py` 的打印已改成
-   `16 board slot(s), 172625 B each (= dtb size)`，三条构建里那条 `headroom (0|...)`
-   的 grep 也一并换掉 —— 它原本会因为这条假告警而放行真正的错误。
-2. **三个 CI 产物从未冷启动上板** —— 所有"能启动"的结论都来自手工产物。
-3. **USB `update.img` 未实刷**，只离线验过打包 + 门禁。
-4. **audio_policy 没落到 vendor 镜像** —— 重打包 super 风险大，现方案是丢了照文档推一遍。
-5. **第三台板拒绝合法 `RKNS`** —— 原因未定，不编。
-6. A/B `boot_b` 是旧镜像，下次换 boot 时同步刷。
+1. **USB3.0 口不认 USB2 设备** —— 插 2.4G 接收器内核**零日志**（不是枚举失败，是压根没有
+   "插入"事件）。DTB 已排除：USB/PHY 21 个节点与原厂 0 差异，改 DTB 不会好。
+   判据是拿 USB3.0 U 盘试一次：认得出 → 该口只引了 SuperSpeed 差分对，全速 12Mbps 的
+   2.4G 接收器物理上不可能工作；也不认 → 供电或连接器本身的问题。
+2. **鼠标右键→返回没持久化** —— 现方案是 `getevent` + `input keyevent 4` 的脚本，重启即失效。
+   要落到 `/vendor/etc/init/*.rc` 才算真解决（一并考虑 `input` 每次起 Java 进程 ~150 ms 的延迟）。
+3. **三个 CI 产物从未冷启动上板** —— 所有"能启动"的结论都来自手工产物。
+4. **USB `update.img` 未实刷**，只离线验过打包 + 门禁。
+5. **audio_policy 没落到 vendor 镜像** —— 重打包 super 风险大，现方案是丢了照文档推一遍。
+6. **第三台板拒绝合法 `RKNS`** —— 原因未定，不编。头里 `0x90`/`0xe8` 是**明文** SHA256，
+   而载荷 RC4 加密，离线不可复算。判据：拔掉 TF 卡冷启动该机，能起 eMMC → BROM 顺序问题；
+   起不来 → BROM 拒它。
 
 ### 改动落在哪
 
-- 仓库 `github.com/linyueweia/TM-android14`，分支 `main`，HEAD = `c320983`，工作区干净
+- 仓库 `github.com/linyueweia/TM-android14`，分支 `main`
 - 板级修复全在 `rk3568-lyt-t68m.dts` → 编出 `dist/*.dtb` → CI 注入 boot.img
 - 运行时改动只有 audio_policy 两份，在 `board-overlay/`
-- 技能库 `rk-android-board-porting` v1.5.5：§8d（四道门禁）、§11i（HDMI 三层判据）、台账 H13
-
----
-
-## 未闭环（不粉饰，接手先看这里）
-
-| # | 项 | 现状 | 怎么闭合 |
-|---|---|---|---|
-| 1 | **三个 CI 包从未冷启动上板** | 只验证了构建链断言（`entries=18`、`grep rev0f.dtb`、size>170000、IP parity FATAL、`set -euo pipefail`）与回归产物逐字节相同 | 取一版 CI 产物写 TF 卡，跑一次冷启动，看串口三行 |
-| 2 | 第三台板为什么拒绝合法的 `RKNS` | 头里 `0x90`/`0xe8` 是**明文** SHA256，而载荷 RC4 加密 → 离线不可复算 | 拔掉 TF 卡冷启动该机：能起 eMMC → BROM 顺序问题；起不来 → BROM 拒它 |
-| 3 | USB `update.img` 只离线验证过打包 | RKDevTool/Maskrom 实刷未做 | 有空上板刷一次，确认能进系统 |
-| 4 | A/B `successful:1, tries-remain:0` | 当前安全（successful 优先），但 `boot_b` 是旧镜像 | 下次换 boot 时同步刷 `boot_b` |
-| 5 | **audio_policy 只在 vendor overlay 里** | 重启已实测保留；但刷 vendor / 恢复出厂会丢 | 重打包 super/vendor 风险大、收益小；现方案 = 丢了照 `board-overlay/README.md` 推三条命令 |
+- 技能库 `rk-android-board-porting` v1.5.6：§8d（四道门禁）、§8e（选对基线）、§11i（HDMI 三层判据）
 
 ---
 

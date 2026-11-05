@@ -13,7 +13,7 @@ LYT T68M（RK3568）适配 Android 14，基线 = 友善电子 rk35xx-android14 S
 | 路径 | 是什么 |
 |---|---|
 | `rk3568-lyt-t68m.dts` | **板级 DTS 源文件**，移植的全部成果都在这（NPU 供电、SDIO、combphy、HDMI 音频…）。CI 编译的就是这份 |
-| `dist/rk3568-lyt-t68m-android.dtb` | 上面那份编出来的成品，172,625 B。**当前机器上跑的就是它** |
+| `dist/rk3568-lyt-t68m-android.dtb` | 上面那份编出来的成品，172,764 B。**当前机器上跑的就是它** |
 | `dist/rk3568-lyt-t68m-vendor.dtb` | **本板原厂 dtb**，从 `boot_a.img` 的 `rk3568-nanopi5-rev0f` 槽提取，`compatible = "lyt,t68m"`、`model = "LYT T68M"`。**所有 CI 的对比基线都是它** |
 | `dist/rk3568-lyt-t68m-sdk.dtb` | 友善 SDK 编译出的原版 dtb（改之前长什么样） |
 | `dist/rk3568-nanopi5-rev01-base.dtb` | R5S（nanopi5-rev01）出货 dtb。**不是本板基线**——那是另一块板，两版 493 项属性不同。仅作 SoC IP 能力的旁证 |
@@ -75,7 +75,7 @@ GitHub Actions（ubuntu-latest，全部 `workflow_dispatch` 手动触发）：
 | 冷启动到桌面 | 162.7 s（首启含 dexopt）/ 74.0 s（之后） |
 | 重启到桌面 | 74.0 s |
 | hwcomposer 崩溃 | 0 次 |
-| 板级 DTB | 172,625 B（`dist/rk3568-lyt-t68m-android.dtb`，`sha256 a2eac6fc…`） |
+| 板级 DTB | 172,764 B（`dist/rk3568-lyt-t68m-android.dtb`，`sha256 5347ff36…`） |
 | boot.img | 58,161,152 B，`id@0x240 = fa48d672…`，`rk_boot_id.py check` = MATCH |
 | HDMI 音频 | 声卡 `0 [rockchiphdmi0]`、`mclk-fs=0x80`、`dumpsys audio` route 全 `hdmi(400)` |
 
